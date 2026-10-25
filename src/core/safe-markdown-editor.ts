@@ -1,7 +1,8 @@
 import { ReferenceSpan, ReferenceType } from './path-resolver';
-import { isCodeOrInlineCode, ReferenceSpan as RS } from './reference-scanner';
+import { isCodeOrInlineCode } from './reference-scanner';
 
-export { ReferenceSpan, ReferenceType, isCodeOrInlineCode };
+export { ReferenceType, isCodeOrInlineCode };
+export type { ReferenceSpan };
 
 export interface EditResult {
 	content: string;
@@ -57,10 +58,35 @@ export function applyReferenceEdits(
 			continue;
 		}
 
+		let replacement = newLink;
+		// Preserve surrounding syntax based on reference type
+		switch (ref.type) {
+			case ReferenceType.InternalWikiImage:
+				replacement = `![[${newLink}]]`;
+				break;
+			case ReferenceType.InternalWikilink:
+				replacement = `[[${newLink}]]`;
+				break;
+			case ReferenceType.InternalImage:
+				replacement = `![alt](${newLink})`; // We don't have alt text, use generic
+				break;
+			case ReferenceType.InternalLink:
+				replacement = `[link](${newLink})`;
+				break;
+			case ReferenceType.HtmlImage:
+				replacement = `<img src="${newLink}" alt="image">`;
+				break;
+			case ReferenceType.Frontmatter:
+				replacement = newLink;
+				break;
+			default:
+				replacement = newLink;
+		}
+
 		edits.push({
 			start: ref.start,
 			end: ref.end,
-			replacement: newLink,
+			replacement,
 		});
 	}
 
