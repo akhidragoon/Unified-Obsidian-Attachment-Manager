@@ -18,56 +18,52 @@ A unified, production-quality Obsidian community plugin that combines and improv
 - **Undo/rollback** supported operations
 - **Keep vault portable** across devices and operating systems
 
-## Installation
+## Usage Guide
 
-### From Obsidian Community Plugins (when available)
-1. Open Settings → Community plugins → Browse
-2. Search for "Unified Obsidian Attachment Manager"
-3. Install and enable
+### On PC/Desktop (Windows, macOS, Linux)
 
-### Manual Installation
-1. Download the latest release from [GitHub Releases](https://github.com/akhidragoon/Unified-Obsidian-Attachment-Manager/releases)
-2. Extract `main.js`, `manifest.json`, and `styles.css` to:
-   ```
-   <Vault>/.obsidian/plugins/unified-attachment-manager/
-   ```
-3. Reload Obsidian and enable the plugin in Settings → Community plugins
+1. **Install & Enable**
+   - Install via Community Plugins or manual installation (see above)
+   - Go to `Settings → Community plugins` and enable "Unified Obsidian Attachment Manager"
 
-## Development
+2. **Localize remote images in a note**
+   - Open the note containing remote images (`http://` or `https://`)
+   - Open the Command Palette with `Ctrl+P` (Windows/Linux) or `Cmd+P` (macOS)
+   - Run `Unified Attachment Manager: Localize remote images in current note`
+   - Review the preview and confirm to download and replace references
 
-### Requirements
-- Node.js 18+ (current LTS)
-- npm
+3. **Organize or audit your vault**
+   - Use `Audit attachment links` to find broken/missing links
+   - Use `Preview attachment organization` to see proposed moves before applying
+   - Use `Find duplicate attachments` to detect duplicates
 
-### Setup
-```bash
-npm install
-```
+### On Android (Obsidian Mobile)
 
-### Development Build (Watch Mode)
-```bash
-npm run dev
-```
+1. **Install**
+   - Copy `main.js`, `manifest.json`, and `styles.css` to:
+     ```
+     <Vault>/.obsidian/plugins/unified-attachment-manager/
+     ```
+   - You can do this via a file manager app (e.g. ZArchiver, FX File Explorer), ADB, or by syncing your vault from desktop
+   - Open Obsidian Mobile → `Settings → Community plugins` → Enable the plugin
 
-### Production Build
-```bash
-npm run build
-```
+2. **Use commands**
+   - Open a note with remote images
+   - Open the Command Palette (tap the ⋮ menu → Command palette, or use your preferred gesture)
+   - Search for and run the desired command (e.g. "Localize remote images in current note")
+   - Review prompts and confirm
 
-### Linting
-```bash
-npm run lint
-```
+**Mobile Notes:**
+- Use Wi-Fi for downloading images or running vault-wide operations
+- Large vaults may take longer to scan on mobile devices
+- Network access is required for downloading remote images
+- If your vault syncs across devices, avoid running bulk operations simultaneously on multiple devices
+- All changes respect your Obsidian attachment settings
 
-### Testing
-```bash
-npm run test
-```
-
-### Watch Tests
-```bash
-npm run test:watch
-```
+### Tips
+- Enable "Preview before write" in settings to always review changes
+- Use undo (`Undo last operation`) to rollback reversible actions
+- For note-relative attachments, the plugin follows Obsidian's "Subfolder name" setting when organizing files
 
 ## Commands
 
@@ -97,11 +93,4 @@ npm run test:watch
 - **No auto-delete** - Never automatically removes files
 - **Explicit confirmation** - Required for vault-wide operations
 - **Safe defaults** - Conservative settings out of the box
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
-Based on:
-- [Save as Local Images](https://github.com/saltyfireball/obsidian-save-as-local-images) (MIT)
-- [Consistent Attachments and Links](https://github.com/dy-sh/obsidian-consistent-attachments-and-links) (MIT)
+- **Mobile compatible** - Works on Obsidian Android/iOS (uses only public APIs)
