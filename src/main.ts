@@ -9,240 +9,262 @@ const IMAGE_PATTERNS = [
 	/<img\b[^>]*\bsrc\s*=\s*"([^"]+)"/gi,
 	/<img\b[^>]*\bsrc\s*=\s*'([^']+)'/gi,
 	/!\[\[(https?:\/\/[^\]]+)]]/g,
+	/]\(\s*(https?:\/\/[^)\s]+)/g,
 ];
 
-const FRONTMATTER_IMAGE_PATTERN = /^[a-zA-Z_-]+:\s*(https?:\/\/\S+)/gm;
-
-function isImageUrl(url: string): boolean {
-	try {
-		const cleanUrl = url.split('?')[0] || url;
-		const lower = cleanUrl.toLowerCase();
-		return IMAGE_EXTENSIONS.some(ext => lower.endsWith(ext));
-	} catch {
-		return false;
-	}
+interface DownloadResult {
+	total: number;
+	saved: number;
+	failed: number;
+	errors: string[];
 }
-
-function getFileExtension(url: string): string {
-	try {
-		const cleanUrl = url.split('?')[0] || url;
-		const lower = cleanUrl.toLowerCase();
-		if (lower.includes('jpeg') || lower.endsWith('.jpg')) return 'jpg';
-		if (lower.endsWith('.png')) return 'png';
-		if (lower.endsWith('.gif')) return 'gif';
-		if (lower.endsWith('.bmp')) return 'bmp';
-		if (lower.endsWith('.svg')) return 'svg';
-		if (lower.endsWith('.webp')) return 'webp';
-		if (lower.endsWith('.ico')) return 'ico';
-		if (lower.endsWith('.tiff') || lower.endsWith('.tif')) return 'tif';
-		if (lower.endsWith('.avif')) return 'avif';
-		return 'png';
-	} catch {
-		return 'png';
-	}
-}
-
-function randomString(length: number): string {
+function generateId(): string {
 	const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-	let result = '';
-	for (let i = 0; i < length; i++) {
-		result += chars.charAt(Math.floor(Math.random() * chars.length));
+	let id = '';
+	for (let i = 0; i < 12; i++) {
+		id += chars.charAt(Math.floor(Math.random() * chars.length));
 	}
-	return result;
+	return id;
 }
 
-function escapeRegex(str: string): string {
+function ensureFolder(vault: App, folderPath: string): Promise<void> {
+	const normalized = normalizePath(folderPath);
+	const existing = vault.getAbstractFileByPath?.(normalized);
+	if (existing) return Promise.resolve();
+	const parts = normalized.split('/').filter(Boolean);
+	let current = '';
+	return parts.reduce((promise, part) => {
+		return promise.then(() => {
+			current = current ? `${current}/${part}` : part;
+			const found = vault.getAbstractFileByPath?.(current);
+			if (!found) {
+				return vault.createFolder?.(current) ?? Promise.resolve();
+			}
+			return Promise.resolve();
+		});
+	}, Promise.resolve());
+}
+
+function buildAttachmentFolder(app: App, file: TFile): string {
+	const vault = app.vault as unknown as Record<string, unknown>;
+	const config = (vault['config'] ?? {}) as Record<string, unknown>;
+	const attachmentBase = config['attachmentFolderPath'] as string | undefined;
+
+	const notePath = file.path;
+	const noteDir = notePath.substring(0, notePath.lastIndexOf('/'));
+	const noteName = file.basename;
+
+	const subPath = noteDir ? `${noteDir}/${noteName}` : noteName;
+
+	if (!attachmentBase || attachmentBase === '/') {
+		return subPath;
+	}
+
+	if (attachmentBase === './') {
+		return noteDir ? `${noteDir}/${noteName}` : noteName;
+	}
+
+	if (attachmentBase.startsWith('./')) {
+		const relative = attachmentBase.substring(2);
+		const base = noteDir ? `${noteDir}/${relative}` : relative;
+		return `${base}/${noteName}`;
+	}
+
+	return `${attachmentBase}/${subPath}`;
+}
+
+function escapeForRegex(str: string): string {
 	return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function formatLinkTarget(path: string): string {
-	if (!path) return path;
-	if (/[\s()<>]/.test(path)) {
-		return `<${path}>`;
+function formatMarkdownLinkTarget(target: string): string {
+	if (!target) return target;
+	if (/[\s()<>]/.test(target)) {
+		return `<${target}>`;
 	}
-	return path;
+	return target;
 }
 
-function unwrapLinkedImages(content: string): string {
-	const linkedImagePattern = /\[!\[([^\]]*)\]\(([^)]+)\)\]\(([^)"]+)(?:\s+"[^"]*")?\s*\)/g;
-	return content.replace(linkedImagePattern, (match, alt, imgUrl, linkUrl) => {
-		if (imgUrl === linkUrl && imgUrl.startsWith('http')) {
-			return `![${alt}](${imgUrl})`;
+function collapseLinkedImages(content: string): string {
+	const linkedImageRe = /\[!\[([^\]]*)\]\(([^)]+)\)\]\(([^)"]+)(?:\s+"[^"]*")?\s*\)/g;
+	return content.replace(linkedImageRe, (_match, alt: string, imgSrc: string, linkHref: string) => {
+		const trimmedHref = linkHref.trim();
+		if (imgSrc === trimmedHref || !trimmedHref.startsWith('http')) {
+			return `![${alt}](${imgSrc})`;
 		}
-		return match;
+		return _match;
 	});
 }
 
-async function ensureFolderExists(vault: any, folderPath: string): Promise<void> {
-	const normalized = normalizePath(folderPath);
-	const existing = (vault as any).getAbstractFileByPath?.(normalized);
-	if (existing) return;
-	const parts = normalized.split('/').filter(Boolean);
-	let current = '';
-	for (const part of parts) {
-		current = current ? `${current}/${part}` : part;
-		const exists = (vault as any).getAbstractFileByPath?.(current);
-		if (!exists) {
-			await (vault as any).createFolder?.(current);
-		}
-	}
+function looksLikeImage(url: string): boolean {
+	const cleaned = (url.split('?')[0] ?? url).toLowerCase();
+	return IMAGE_EXTENSIONS.some((ext) => cleaned.endsWith(ext));
 }
 
-function getAttachmentFolder(vault: any, file: TFile, settings: PluginSettings): string {
-	const config = (vault as any).config || {};
-	const configPath = config?.attachmentFolderPath as string | undefined;
-	const fileDir = file.parent?.path || '';
-	const noteBase = file.basename;
-
-	if (!configPath || configPath === '/') {
-		return fileDir || '';
-	}
-	if (configPath === './') {
-		return fileDir ? `${fileDir}/${noteBase}` : noteBase;
-	}
-	if (configPath.startsWith('./')) {
-		const sub = configPath.substring(2);
-		if (fileDir) {
-			return `${fileDir}/${sub}`;
-		}
-		return sub;
-	}
-	if (fileDir) {
-		return `${fileDir}/${noteBase}`;
-	}
-	return noteBase;
+function extensionFromUrl(url: string): string {
+	const cleaned = (url.split('?')[0] ?? url).toLowerCase();
+	if (cleaned.endsWith('.jpg') || cleaned.endsWith('.jpeg')) return 'jpg';
+	if (cleaned.endsWith('.png')) return 'png';
+	if (cleaned.endsWith('.gif')) return 'gif';
+	if (cleaned.endsWith('.bmp')) return 'bmp';
+	if (cleaned.endsWith('.svg')) return 'svg';
+	if (cleaned.endsWith('.webp')) return 'webp';
+	if (cleaned.endsWith('.ico')) return 'ico';
+	if (cleaned.endsWith('.tiff') || cleaned.endsWith('.tif')) return 'tiff';
+	if (cleaned.endsWith('.avif')) return 'avif';
+	return 'png';
 }
 
-function findRemoteImages(content: string): Set<string> {
+function extensionFromContentType(contentType: string): string {
+	const ct = contentType.toLowerCase();
+	if (ct.includes('jpeg') || ct.includes('jpg')) return 'jpg';
+	if (ct.includes('png')) return 'png';
+	if (ct.includes('gif')) return 'gif';
+	if (ct.includes('bmp')) return 'bmp';
+	if (ct.includes('svg')) return 'svg';
+	if (ct.includes('webp')) return 'webp';
+	if (ct.includes('ico') || ct.includes('icon')) return 'ico';
+	if (ct.includes('tiff')) return 'tiff';
+	if (ct.includes('avif')) return 'avif';
+	return 'png';
+}
+
+function findRemoteImageUrls(content: string): string[] {
 	const urls = new Set<string>();
 
 	for (const pattern of IMAGE_PATTERNS) {
 		pattern.lastIndex = 0;
 		let match: RegExpExecArray | null;
 		while ((match = pattern.exec(content)) !== null) {
-			const url = String(match[1] ?? '').trim();
-			if (url && url.startsWith('http') && isImageUrl(url)) {
+			const url = (match[1] ?? '').trim();
+			if (url && url.startsWith('http') && looksLikeImage(url)) {
 				urls.add(url);
 			}
 		}
 	}
 
-	const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-	if (frontmatterMatch) {
-		const fm = frontmatterMatch[1] ?? '';
-		FRONTMATTER_IMAGE_PATTERN.lastIndex = 0;
+	const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+	if (fmMatch) {
+		const frontmatter = fmMatch[1] ?? '';
+		const FRONTMATTER_URL_RE = /^[a-zA-Z_-]+:\s*(https?:\/\/\S+)/gm;
+		FRONTMATTER_URL_RE.lastIndex = 0;
 		let match: RegExpExecArray | null;
-		while ((match = FRONTMATTER_IMAGE_PATTERN.exec(fm)) !== null) {
-			const url = String(match[1] ?? '').trim();
-			if (url && url.startsWith('http') && isImageUrl(url)) {
+		while ((match = FRONTMATTER_URL_RE.exec(frontmatter)) !== null) {
+			const url = (match[1] ?? '').trim();
+			if (url && url.startsWith('http') && looksLikeImage(url)) {
 				urls.add(url);
 			}
 		}
 	}
 
-	return urls;
+	return Array.from(urls);
 }
 
-async function saveRemoteImages(app: App, file: TFile, showNotice: boolean, attachmentFolder: string): Promise<void> {
-	try {
-		const content = await app.vault.read(file);
-		const urls = findRemoteImages(content);
-		
-		if (urls.size === 0) {
-			if (showNotice) {
-				new Notice('No remote images found in this note.');
-			}
-			return;
-		}
+async function downloadAndReplaceImages(
+	app: App,
+	file: TFile,
+	showNotice: boolean,
+): Promise<DownloadResult> {
+	const content = await app.vault.read(file);
+	const urls = findRemoteImageUrls(content);
 
-		if (attachmentFolder) {
-			await ensureFolderExists(app.vault, attachmentFolder);
-		}
+	const result: DownloadResult = {
+		total: urls.length,
+		saved: 0,
+		failed: 0,
+		errors: [],
+	};
 
+	if (urls.length === 0) {
 		if (showNotice) {
-			new Notice(`Found ${urls.size} remote image(s). Downloading...`);
+			new Notice('No remote images found in this note.');
 		}
+		return result;
+	}
 
-		const urlToPath = new Map<string, string>();
-		let saved = 0;
-		let failed = 0;
+	const attachmentFolder = buildAttachmentFolder(app, file);
+	await ensureFolder(app.vault, attachmentFolder);
 
-		for (const url of urls) {
-			try {
-				const response = await requestUrl({ url });
-				const arrayBuffer = response.arrayBuffer;
-				const contentType = response.headers['content-type'] || response.headers['Content-Type'] || '';
-				
-				let ext = getFileExtension(url);
-				if (contentType.includes('image/')) {
-					if (contentType.includes('jpeg') || contentType.includes('jpg')) ext = 'jpg';
-					else if (contentType.includes('png')) ext = 'png';
-					else if (contentType.includes('gif')) ext = 'gif';
-					else if (contentType.includes('webp')) ext = 'webp';
-					else if (contentType.includes('svg')) ext = 'svg';
-					else if (contentType.includes('bmp')) ext = 'bmp';
-				}
+	if (showNotice) {
+		new Notice(`Found ${urls.length} remote image(s). Downloading...`);
+	}
 
-				const fileName = `${randomString(12)}.${ext}`;
-				const savePath = (attachmentFolder ? normalizePath(`${attachmentFolder}/${fileName}`) : normalizePath(fileName)) || fileName;
-				
-				await app.vault.createBinary(savePath, arrayBuffer);
-				urlToPath.set(url, savePath);
-				saved++;
-			} catch (err) {
-				failed++;
-				console.error('Failed to download image:', url, err);
-			}
-		}
+	const urlToLocal = new Map<string, string>();
 
-		let newContent = content;
-		for (const [url, localPath] of urlToPath) {
-			const formatted = formatLinkTarget(localPath);
-			const regex = new RegExp(escapeRegex(url), 'g');
-			newContent = newContent.replace(regex, formatted);
-		}
+	for (const url of urls) {
+		try {
+			const response = await requestUrl({ url });
+			const buffer = response.arrayBuffer;
 
-		newContent = unwrapLinkedImages(newContent);
-
-		if (newContent !== content) {
-			await app.vault.modify(file, newContent);
-		}
-
-		if (showNotice) {
-			if (failed > 0) {
-				new Notice(`Saved ${saved}/${urls.size} images. ${failed} failed.`);
+			const contentType = response.headers['content-type'] ?? '';
+			let ext: string;
+			if (contentType && contentType.includes('image/')) {
+				ext = extensionFromContentType(contentType);
 			} else {
-				new Notice(`All ${saved} images saved locally.`);
+				ext = extensionFromUrl(url);
 			}
-		}
-	} catch (err) {
-		console.error('Error localizing images:', err);
-		if (showNotice) {
-			new Notice(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+
+			const filename = `${generateId()}.${ext}`;
+			const filePath = normalizePath(`${attachmentFolder}/${filename}`);
+
+			await app.vault.createBinary(filePath, buffer);
+			urlToLocal.set(url, filePath);
+			result.saved++;
+		} catch (e: unknown) {
+			result.failed++;
+			const msg = e instanceof Error ? e.message : 'Unknown error';
+			result.errors.push(`${url}: ${msg}`);
 		}
 	}
+
+	let updatedContent = content;
+	for (const [url, localPath] of urlToLocal) {
+		const formatted = formatMarkdownLinkTarget(localPath);
+		const pattern = new RegExp(escapeForRegex(url), 'g');
+		updatedContent = updatedContent.replace(pattern, formatted);
+	}
+
+	updatedContent = collapseLinkedImages(updatedContent);
+
+	if (updatedContent !== content) {
+		await app.vault.modify(file, updatedContent);
+	}
+
+	if (showNotice) {
+		if (result.failed > 0) {
+			new Notice(
+				`Saved ${result.saved}/${result.total} images. ${result.failed} failed.`,
+			);
+		} else {
+			new Notice(`All ${result.saved} images saved locally.`);
+		}
+	}
+
+	return result;
 }
 
-function collectMarkdownFiles(folder: any): TFile[] {
-	const files: TFile[] = [];
-	const walk = (f: any) => {
-		const children = f.children;
-		if (Array.isArray(children)) {
-			for (const child of children) {
-				if (child instanceof TFile && child.extension === 'md') {
-					files.push(child);
-				} else if (child && typeof child === 'object' && 'children' in child) {
-					walk(child);
-				}
+function collectMarkdownFiles(folder: TFolder): TFile[] {
+	const out: TFile[] = [];
+	const walk = (f: TFolder) => {
+		for (const child of f.children) {
+			if (child instanceof TFile && child.extension === 'md') {
+				out.push(child);
+			} else if (child instanceof TFolder) {
+				walk(child);
 			}
 		}
 	};
 	walk(folder);
-	return files;
+	return out;
 }
 
-async function saveImagesInFolder(app: App, folder: any, showNotice: boolean, settings: PluginSettings): Promise<void> {
+async function saveImagesInFolder(
+	app: App,
+	folder: TFolder,
+	showNotice: boolean,
+): Promise<void> {
 	const files = collectMarkdownFiles(folder);
+
 	if (files.length === 0) {
 		if (showNotice) new Notice('No Markdown notes found in this folder.');
 		return;
@@ -250,80 +272,33 @@ async function saveImagesInFolder(app: App, folder: any, showNotice: boolean, se
 
 	if (showNotice) new Notice(`Scanning ${files.length} note(s) for remote images...`);
 
-	let notesProcessed = 0;
+	let notesWithImages = 0;
 	let totalSaved = 0;
 	let totalFailed = 0;
 	const errors: string[] = [];
 
 	for (const file of files) {
 		try {
-			const content = await app.vault.read(file);
-			const urls = findRemoteImages(content);
-
-			if (urls.size === 0) continue;
-
-			const attachmentFolder = getAttachmentFolder(app.vault, file, settings);
-			if (attachmentFolder) {
-				await ensureFolderExists(app.vault, attachmentFolder);
+			const result = await downloadAndReplaceImages(app, file, false);
+			if (result.total > 0) notesWithImages++;
+			totalSaved += result.saved;
+			totalFailed += result.failed;
+			for (const err of result.errors) {
+				errors.push(`${file.path}: ${err}`);
 			}
-
-			const urlToPath = new Map<string, string>();
-			let saved = 0;
-			let failed = 0;
-
-			for (const url of urls) {
-				try {
-					const response = await requestUrl({ url });
-					const arrayBuffer = response.arrayBuffer;
-					const contentType = response.headers['content-type'] || response.headers['Content-Type'] || '';
-
-					let ext = getFileExtension(url);
-					if (contentType.includes('image/')) {
-						if (contentType.includes('jpeg') || contentType.includes('jpg')) ext = 'jpg';
-						else if (contentType.includes('png')) ext = 'png';
-						else if (contentType.includes('gif')) ext = 'gif';
-						else if (contentType.includes('webp')) ext = 'webp';
-						else if (contentType.includes('svg')) ext = 'svg';
-						else if (contentType.includes('bmp')) ext = 'bmp';
-					}
-
-					const fileName = `${randomString(12)}.${ext}`;
-					const savePath = (attachmentFolder ? normalizePath(`${attachmentFolder}/${fileName}`) : normalizePath(fileName)) || fileName;
-
-					await app.vault.createBinary(savePath, arrayBuffer);
-					urlToPath.set(url, savePath);
-					saved++;
-				} catch (err) {
-					failed++;
-					console.error('Failed to download image:', url, err);
-				}
-			}
-
-			let newContent = content;
-			for (const [url, localPath] of urlToPath) {
-				const formatted = formatLinkTarget(localPath);
-				const regex = new RegExp(escapeRegex(url), 'g');
-				newContent = newContent.replace(regex, formatted);
-			}
-
-			newContent = unwrapLinkedImages(newContent);
-
-			if (newContent !== content) {
-				await app.vault.modify(file, newContent);
-			}
-
-			notesProcessed++;
-			totalSaved += saved;
-			totalFailed += failed;
-		} catch (err) {
-			errors.push(`${file.path}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+		} catch (e: unknown) {
+			const msg = e instanceof Error ? e.message : 'Unknown error';
+			errors.push(`${file.path}: ${msg}`);
+			totalFailed++;
 		}
 	}
 
-	if (showNotice) {
-		const failedStr = totalFailed > 0 ? `, ${totalFailed} failed` : '';
-		new Notice(`${files.length} note(s) scanned, ${notesProcessed} had images, ${totalSaved} image(s) saved${failedStr}`, 8000);
-	}
+	const failedSuffix = totalFailed > 0 ? `, ${totalFailed} failed` : '';
+	const summary =
+		`${files.length} note(s) scanned, ${notesWithImages} contained images, ` +
+		`${totalSaved} image(s) saved${failedSuffix}.`;
+	new Notice(summary, 8000);
+
 	if (errors.length > 0) {
 		console.error('Save remote images errors:\n' + errors.join('\n'));
 	}
@@ -341,10 +316,11 @@ export default class UnifiedAttachmentManager extends Plugin {
 			name: 'Localize remote images in current note',
 			checkCallback: (checking) => {
 				const file = this.app.workspace.getActiveFile();
-				if (!file || file.extension !== 'md') return false;
+				if (!file || file.extension !== 'md') {
+					return false;
+				}
 				if (!checking) {
-					const attachmentFolder = getAttachmentFolder(this.app.vault, file, this.settings);
-					saveRemoteImages(this.app, file, this.settings.showProgress ?? true, attachmentFolder);
+					void this.saveImages(file);
 				}
 				return true;
 			},
@@ -354,7 +330,7 @@ export default class UnifiedAttachmentManager extends Plugin {
 			id: 'localize-remote-images-folder',
 			name: 'Localize remote images in folder',
 			callback: async () => {
-				new Notice('Use the context menu on a folder, or select a folder and run this command');
+				new Notice('Use the context menu on a folder to localize images in that folder');
 			},
 		});
 
@@ -362,7 +338,12 @@ export default class UnifiedAttachmentManager extends Plugin {
 			id: 'localize-remote-images-vault',
 			name: 'Localize remote images across vault',
 			callback: () => {
-				new Notice('Vault-wide processing requires confirmation');
+				const root = this.app.vault.getAbstractFileByPath('/');
+				if (root instanceof TFolder) {
+					void saveImagesInFolder(this.app, root, this.settings.showProgress ?? true);
+				} else {
+					new Notice('Could not access vault root');
+				}
 			},
 		});
 
@@ -370,7 +351,7 @@ export default class UnifiedAttachmentManager extends Plugin {
 			id: 'audit-attachment-links',
 			name: 'Audit attachment links',
 			callback: () => {
-				new Notice('Audit feature coming soon');
+				new Notice('Audit feature requires vault-wide link checking');
 			},
 		});
 
@@ -378,7 +359,7 @@ export default class UnifiedAttachmentManager extends Plugin {
 			id: 'preview-attachment-organization',
 			name: 'Preview attachment organization',
 			callback: () => {
-				new Notice('Organization preview coming soon');
+				new Notice('Organization preview feature coming soon');
 			},
 		});
 
@@ -414,7 +395,7 @@ export default class UnifiedAttachmentManager extends Plugin {
 							.setTitle('Localize remote images in folder')
 							.setIcon('image-down')
 							.onClick(() => {
-								void 						void saveImagesInFolder(this.app, file, this.settings.showProgress ?? true, this.settings);
+								void saveImagesInFolder(this.app, file, this.settings.showProgress ?? true);
 							});
 					});
 				}
@@ -422,8 +403,24 @@ export default class UnifiedAttachmentManager extends Plugin {
 		);
 	}
 
+	private async saveImages(file: TFile): Promise<void> {
+		try {
+			const result = await downloadAndReplaceImages(this.app, file, this.settings.showProgress ?? true);
+			if (result.total === 0) return;
+			if (result.failed > 0) {
+				new Notice(`Saved ${result.saved}/${result.total} images. ${result.failed} failed.`);
+			} else {
+				new Notice(`All ${result.saved} images saved locally.`);
+			}
+		} catch (e: unknown) {
+			const msg = e instanceof Error ? e.message : 'Unknown error';
+			new Notice(`Failed to save images: ${msg}`);
+		}
+	}
+
 	async loadSettings() {
-		this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) } as PluginSettings;
+		const data = (await this.loadData()) as Partial<PluginSettings> | null;
+		this.settings = { ...DEFAULT_SETTINGS, ...(data ?? {}) };
 	}
 
 	async saveSettings() {
