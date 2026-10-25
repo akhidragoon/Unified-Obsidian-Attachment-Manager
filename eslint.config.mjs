@@ -13,15 +13,18 @@ export default defineConfig(
 		'package.json',
 		'package-lock.json',
 		'tsconfig.json',
+		'vitest.config.ts',
+		'tests',
 	]),
 	{
+		files: ['src/**/*.ts'],
 		languageOptions: {
 			globals: {
 				...globals.browser,
 			},
 			parserOptions: {
 				projectService: {
-					allowDefaultProject: ['eslint.config.mts', 'manifest.json'],
+					allowDefaultProject: ['eslint.config.mjs', 'manifest.json'],
 				},
 				tsconfigRootDir: import.meta.dirname,
 				extraFileExtensions: ['.json'],

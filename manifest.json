@@ -1,11 +1,9 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
-	"version": "1.0.0",
+	"id": "unified-attachment-manager",
+	"name": "Unified Obsidian Attachment Manager",
+	"version": "0.1.0",
 	"minAppVersion": "1.0.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"description": "Download remote images, organize attachments, audit broken links, and keep your vault portable.",
+	"author": "khidragoon",
 	"isDesktopOnly": false
 }

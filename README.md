@@ -1,92 +1,107 @@
-# Obsidian Sample Plugin
+# Unified Obsidian Attachment Manager
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+A unified, production-quality Obsidian community plugin that combines and improves the capabilities of:
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+- [Save as Local Images](https://github.com/saltyfireball/obsidian-save-as-local-images)
+- [Consistent Attachments and Links](https://github.com/dy-sh/obsidian-consistent-attachments-and-links)
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
+## Features
 
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and outputs a Notice on click.
-- Registers a global interval which logs 'setInterval' to the console.
+- **Download remote images** into your vault with configurable options
+- **Replace remote image references** with local references automatically
+- **Organize attachments** predictably with configurable folder policies
+- **Keep links working** when notes and attachments move or are renamed
+- **Find broken links** and missing files
+- **Detect duplicate** and potentially unused attachments
+- **Repair attachment paths** safely
+- **Preview changes** before applying them
+- **Undo/rollback** supported operations
+- **Keep vault portable** across devices and operating systems
 
-## First time developing plugins?
+## Installation
 
-Quick starting guide for new plugin devs:
+### From Obsidian Community Plugins (when available)
+1. Open Settings → Community plugins → Browse
+2. Search for "Unified Obsidian Attachment Manager"
+3. Install and enable
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `src/main.ts` to `main.js`.
-- Make changes to `src/main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+### Manual Installation
+1. Download the latest release from [GitHub Releases](https://github.com/akhidragoon/Unified-Obsidian-Attachment-Manager/releases)
+2. Extract `main.js`, `manifest.json`, and `styles.css` to:
+   ```
+   <Vault>/.obsidian/plugins/unified-attachment-manager/
+   ```
+3. Reload Obsidian and enable the plugin in Settings → Community plugins
 
-## Releasing new releases
+## Development
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+### Requirements
+- Node.js 18+ (current LTS)
+- npm
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
-
-## Adding your plugin to the community plugin list
-
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
-
-## How to use
-
-- Clone this repo.
-- Make sure your NodeJS is at least v18 (`node --version`).
-- `npm i` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
-
-## Manually installing the plugin
-
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
-
-## Improve code quality with eslint
-
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code.
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
-
-## Funding URL
-
-You can include funding URLs where people who use your plugin can financially support it.
-
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
-
-```json
-{
-	"fundingUrl": "https://buymeacoffee.com"
-}
+### Setup
+```bash
+npm install
 ```
 
-If you have multiple URLs, you can also do:
-
-```json
-{
-	"fundingUrl": {
-		"Buy Me a Coffee": "https://buymeacoffee.com",
-		"GitHub Sponsor": "https://github.com/sponsors",
-		"Patreon": "https://www.patreon.com/"
-	}
-}
+### Development Build (Watch Mode)
+```bash
+npm run dev
 ```
 
-## API Documentation
+### Production Build
+```bash
+npm run build
+```
 
-See https://docs.obsidian.md
+### Linting
+```bash
+npm run lint
+```
+
+### Testing
+```bash
+npm run test
+```
+
+### Watch Tests
+```bash
+npm run test:watch
+```
+
+## Commands
+
+- **Localize remote images in current note** - Download all remote images in the active note
+- **Localize remote images in folder** - Process all notes in a selected folder
+- **Localize remote images across vault** - Process entire vault (with confirmation)
+- **Audit attachment links** - Scan vault for broken links and missing files
+- **Preview attachment organization** - Show what would be reorganized
+- **Find duplicate attachments** - Identify duplicate files by URL or content
+- **Review potentially unused attachments** - Find orphaned files
+- **Undo last operation** - Rollback the last reversible change
+
+## Settings
+
+- **Default attachment location** - Central folder or note-relative
+- **Naming policy** - Filename sanitization and collision handling
+- **Download timeout** - Network request timeout
+- **Max download size** - Prevent oversized downloads
+- **Duplicate detection** - URL-based or content-based
+- **Preview before write** - Always show changes before applying
+- **Backup history** - Number of operations to keep for undo
+
+## Safety Features
+
+- **Preview mode** - Never writes to vault without confirmation
+- **Atomic operations** - Uses temporary files and rollback
+- **No auto-delete** - Never automatically removes files
+- **Explicit confirmation** - Required for vault-wide operations
+- **Safe defaults** - Conservative settings out of the box
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+Based on:
+- [Save as Local Images](https://github.com/saltyfireball/obsidian-save-as-local-images) (MIT)
+- [Consistent Attachments and Links](https://github.com/dy-sh/obsidian-consistent-attachments-and-links) (MIT)
