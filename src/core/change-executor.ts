@@ -39,9 +39,9 @@ export function executeOperation(
 				case OperationType.MoveFile:
 					op.status = OperationStatus.Completed;
 					break;
-				case OperationType.RewriteReference:
-					op.status = OperationStatus.Completed;
-					break;
+		case OperationType.RewriteReference:
+			op.status = OperationStatus.Failed;
+			break;
 				case OperationType.RepairPath:
 					op.status = OperationStatus.Completed;
 					break;
@@ -98,11 +98,12 @@ export function executePlan(
 					errors.push(`Operation ${op.id} failed: ${err.message}`);
 					options.onError?.(op.id, err.message);
 				});
-		} catch (err: Error) {
+		} catch (err) {
+			const error = err instanceof Error ? err : new Error(String(err));
 			op.status = OperationStatus.Failed;
 			failedOperations.push(op.id);
-			errors.push(`Operation ${op.id} failed: ${err.message}`);
-			options.onError?.(op.id, err.message);
+			errors.push(`Operation ${op.id} failed: ${error.message}`);
+			options.onError?.(op.id, error.message);
 		}
 	}
 
