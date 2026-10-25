@@ -3,6 +3,12 @@ export interface PluginSettings {
 	showProgress: boolean;
 	maxDownloadSize: number;
 	downloadTimeoutSeconds: number;
+	downloadTimeout?: number;
+	previewBeforeWrite?: boolean;
+	backupHistory?: number;
+	alwaysUseSubfolder?: boolean;
+	namingPolicy?: string;
+	duplicateDetection?: 'url' | 'content';
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -10,4 +16,10 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	showProgress: true,
 	maxDownloadSize: 10485760,
 	downloadTimeoutSeconds: 30,
+	downloadTimeout: 30000,
+	previewBeforeWrite: true,
+	backupHistory: 5,
+	alwaysUseSubfolder: true,
+	namingPolicy: 'sanitize',
+	duplicateDetection: 'url',
 };
