@@ -2,7 +2,7 @@
 	"id": "unified-attachment-manager",
 	"name": "Unified Obsidian Attachment Manager",
 	"version": "0.1.0",
-	"minAppVersion": "1.0.0",
+	"minAppVersion": "1.4.0",
 	"description": "Download remote images, organize attachments, audit broken links, and keep your vault portable.",
 	"author": "khidragoon",
 	"isDesktopOnly": false

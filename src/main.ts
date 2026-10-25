@@ -1,6 +1,7 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, requestUrl, normalizePath } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, requestUrl, normalizePath, Vault } from 'obsidian';
 import { DEFAULT_SETTINGS } from './settings/settings';
 import type { PluginSettings } from './settings/settings';
+import { createPathAuditReport, createPathIssue, getAttachmentFolderForNote, generateAttachmentReport, hasUnsafeFilename, isAttachmentFilename } from './services/path-auditor';
 
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp', '.ico', '.tiff', '.tif', '.avif'];
 
@@ -12,12 +13,20 @@ const IMAGE_PATTERNS = [
 	/]\(\s*(https?:\/\/[^)\s]+)/g,
 ];
 
+const LINK_PATTERNS = [
+	/!\[([^\]]*)\]\(([^)\s]+)/g,
+	/\[([^\]]+)\]\(([^)\s]+)/g,
+	/!\[\[([^\]]+)\]\]/g,
+	/\[\[([^\]]+)\]\]/g,
+];
+
 interface DownloadResult {
 	total: number;
 	saved: number;
 	failed: number;
 	errors: string[];
 }
+
 function generateId(): string {
 	const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
 	let id = '';
@@ -27,20 +36,19 @@ function generateId(): string {
 	return id;
 }
 
-function ensureFolder(vault: App, folderPath: string): Promise<void> {
+function ensureFolder(vault: Vault, folderPath: string): Promise<void> {
 	const normalized = normalizePath(folderPath);
 	const existing = vault.getAbstractFileByPath?.(normalized);
 	if (existing) return Promise.resolve();
 	const parts = normalized.split('/').filter(Boolean);
 	let current = '';
 	return parts.reduce((promise, part) => {
-		return promise.then(() => {
+		return promise.then(async () => {
 			current = current ? `${current}/${part}` : part;
 			const found = vault.getAbstractFileByPath?.(current);
 			if (!found) {
-				return vault.createFolder?.(current) ?? Promise.resolve();
+				await vault.createFolder?.(current);
 			}
-			return Promise.resolve();
 		});
 	}, Promise.resolve());
 }
@@ -300,8 +308,91 @@ async function saveImagesInFolder(
 	new Notice(summary, 8000);
 
 	if (errors.length > 0) {
-		console.error('Save remote images errors:\n' + errors.join('\n'));
+		new Notice(`Errors in ${errors.length} file(s). Check console for details.`);
 	}
+}
+
+async function auditAttachmentLinks(app: App): Promise<void> {
+	const root = app.vault.getAbstractFileByPath('/');
+	if (!(root instanceof TFolder)) {
+		new Notice('Could not access vault root');
+		return;
+	}
+	const files = collectMarkdownFiles(root);
+	const issues = [];
+	let totalAttachments = 0;
+	let referencedAttachments = new Set<string>();
+
+	for (const file of files) {
+		const content = await app.vault.read(file);
+		const urls = findRemoteImageUrls(content);
+
+		for (const url of urls) {
+			if (looksLikeImage(url)) {
+				issues.push(createPathIssue(
+					'broken_link',
+					file.path,
+					url,
+					'Remote image not downloaded to vault',
+					'high',
+				));
+			}
+		}
+
+		// Find all attachment links in the note
+		for (const pattern of LINK_PATTERNS) {
+			pattern.lastIndex = 0;
+			let match: RegExpExecArray | null;
+			while ((match = pattern.exec(content)) !== null) {
+				const link = match[2] ?? match[1] ?? '';
+				if (!link || link.startsWith('http') || link.startsWith('#')) continue;
+
+				const linkPath = normalizePath(link);
+				const fileObj = app.vault.getAbstractFileByPath(linkPath);
+				if (fileObj && fileObj instanceof TFile && isAttachmentFilename(fileObj.name)) {
+					referencedAttachments.add(linkPath);
+					totalAttachments++;
+
+					// Check if attachment is in proper folder
+					const properFolder = getAttachmentFolderForNote(app, file.path);
+					const linkDir = linkPath.substring(0, linkPath.lastIndexOf('/'));
+					if (properFolder && linkDir !== properFolder) {
+						issues.push(createPathIssue(
+							'misplaced',
+							file.path,
+							link,
+							'Attachment not in proper folder for this note',
+							'medium',
+							`${properFolder}/${fileObj.name}`,
+						));
+					}
+				}
+			}
+		}
+	}
+
+	// Check for unsafe filenames
+	const allFiles = app.vault.getAllLoadedFiles();
+	for (const f of allFiles) {
+		if (f instanceof TFile && isAttachmentFilename(f.name)) {
+			if (hasUnsafeFilename(f.name)) {
+				issues.push(createPathIssue(
+					'unsafe_filename',
+					f.path,
+					f.name,
+					'Filename contains unsafe characters',
+					'low',
+				));
+			}
+		}
+	}
+
+	const report = createPathAuditReport(files.length, totalAttachments, issues);
+	const reportText = generateAttachmentReport(report);
+
+	// Create a modal or notice with the report
+	new Notice(`Audit complete: ${report.summary.brokenLinks} broken links, ${report.summary.missingAttachments} missing, ${report.summary.misplaced} misplaced`);
+	new Notice(reportText.substring(0, 200) + '...');
 }
 
 export default class UnifiedAttachmentManager extends Plugin {
@@ -351,7 +442,7 @@ export default class UnifiedAttachmentManager extends Plugin {
 			id: 'audit-attachment-links',
 			name: 'Audit attachment links',
 			callback: () => {
-				new Notice('Audit feature requires vault-wide link checking');
+				void auditAttachmentLinks(this.app);
 			},
 		});
 
