@@ -1,4 +1,4 @@
-import { App, normalizePath } from 'obsidian';
+import { App } from 'obsidian';
 
 export interface PathIssue {	type: 'broken_link' | 'missing_attachment' | 'misplaced' | 'unsafe_filename';
 	filePath: string;
