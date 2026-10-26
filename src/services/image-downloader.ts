@@ -7,6 +7,7 @@
 
 import { App, Notice, TFile, TFolder, Vault, requestUrl, normalizePath } from 'obsidian';
 import { type PluginSettings } from '../settings/settings';
+import { RollbackManager } from './rollback-manager';
 
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp', '.ico', '.tiff', '.tif', '.avif'];
 
@@ -169,7 +170,8 @@ function findRemoteImageUrls(content: string): string[] {
 export async function downloadAndReplaceImages(
 	app: App,
 	file: TFile,
-	showNotice: boolean
+	showNotice: boolean,
+	rollbackManager?: RollbackManager | null
 ): Promise<DownloadResult> {
 	const content = await app.vault.read(file);
 	const urls = findRemoteImageUrls(content);
@@ -186,6 +188,18 @@ export async function downloadAndReplaceImages(
 			new Notice('No remote images found in this note.');
 		}
 		return result;
+	}
+
+	// Preview confirmation before writing
+	if (showNotice) {
+		const urlList = urls.slice(0, 5).map(u => '• ' + u.split('/').pop()!).join('\n');
+		const more = urls.length > 5 ? `\n... and ${urls.length - 5} more` : '';
+		const confirmed = window.confirm(
+			`Found ${urls.length} remote image(s) in "${file.name}".\n\n${urlList}${more}\n\nDownload and replace with local files?`
+		);
+		if (!confirmed) {
+			return result;
+		}
 	}
 
 	const attachmentFolder = buildAttachmentFolder(app, file);
@@ -216,6 +230,7 @@ export async function downloadAndReplaceImages(
 			await app.vault.createBinary(filePath, buffer);
 			urlToLocal.set(url, filePath);
 			result.saved++;
+			rollbackManager?.recordCreateBinary(filePath, `Download image: ${url}`);
 		} catch (e: unknown) {
 			result.failed++;
 			const msg = e instanceof Error ? e.message : 'Unknown error';
@@ -226,14 +241,42 @@ export async function downloadAndReplaceImages(
 	let updatedContent = content;
 	for (const [url, localPath] of urlToLocal) {
 		const formatted = formatMarkdownLinkTarget(localPath);
-		const pattern = new RegExp(escapeForRegex(url), 'g');
-		updatedContent = updatedContent.replace(pattern, formatted);
+		const escapedUrl = escapeForRegex(url);
+
+		// Replace markdown image: ![alt](url) -> ![alt](local)
+		const mdImageRe = new RegExp(
+			'!\\[([^\\]]*)\\]\\(' + escapedUrl + '\\)',
+			'g'
+		);
+		updatedContent = updatedContent.replace(mdImageRe, `![$1](${formatted})`);
+
+		// Replace markdown link: [text](url) -> [text](local)
+		const mdLinkRe = new RegExp(
+			'\\[([^\\]]*)\\]\\(' + escapedUrl + '\\)',
+			'g'
+		);
+		updatedContent = updatedContent.replace(mdLinkRe, `[$1](${formatted})`);
+
+		// Replace HTML img: <img src="url"> -> <img src="local">
+		const htmlImgRe = new RegExp(
+			'(<img\\b[^>]*\\bsrc\\s*=\\s*[\'"])' + escapedUrl + '([\'"])',
+			'gi'
+		);
+		updatedContent = updatedContent.replace(htmlImgRe, `$1${formatted}$2`);
+
+		// Replace wiki embed: ![[url]] -> ![[local]]
+		const wikiRe = new RegExp(
+			'!\\[\\[' + escapedUrl + '\\]\\]',
+			'g'
+		);
+		updatedContent = updatedContent.replace(wikiRe, `![[${formatted}]]`);
 	}
 
 	updatedContent = collapseLinkedImages(updatedContent);
 
 	if (updatedContent !== content) {
 		await app.vault.modify(file, updatedContent);
+		rollbackManager?.recordModify(file.path, content, `Localize remote images in: ${file.name}`);
 	}
 
 	if (showNotice) {
@@ -266,7 +309,8 @@ export async function saveImagesInFolder(
 	app: App,
 	folder: TFolder,
 	showNotice: boolean,
-	settings: PluginSettings
+	settings: PluginSettings,
+	rollbackManager?: RollbackManager | null
 ): Promise<void> {
 	const files = collectMarkdownFiles(folder);
 
@@ -315,6 +359,7 @@ export async function saveImagesInFolder(
 					await app.vault.createBinary(filePath, buffer);
 					urlToLocal.set(url, filePath);
 					saved++;
+					rollbackManager?.recordCreateBinary(filePath, `Download image: ${url}`);
 				} catch (e: unknown) {
 					failed++;
 					const msg = e instanceof Error ? e.message : 'Unknown error';
@@ -325,14 +370,42 @@ export async function saveImagesInFolder(
 			let updatedContent = content;
 			for (const [url, localPath] of urlToLocal) {
 				const formatted = formatMarkdownLinkTarget(localPath);
-				const pattern = new RegExp(escapeForRegex(url), 'g');
-				updatedContent = updatedContent.replace(pattern, formatted);
+				const escapedUrl = escapeForRegex(url);
+
+				// Replace markdown image: ![alt](url) -> ![alt](local)
+				const mdImageRe = new RegExp(
+					'!\\[([^\\]]*)\\]\\(' + escapedUrl + '\\)',
+					'g'
+				);
+				updatedContent = updatedContent.replace(mdImageRe, `![$1](${formatted})`);
+
+				// Replace markdown link: [text](url) -> [text](local)
+				const mdLinkRe = new RegExp(
+					'\\[([^\\]]*)\\]\\(' + escapedUrl + '\\)',
+					'g'
+				);
+				updatedContent = updatedContent.replace(mdLinkRe, `[$1](${formatted})`);
+
+				// Replace HTML img: <img src="url"> -> <img src="local">
+				const htmlImgRe = new RegExp(
+					'(<img\\b[^>]*\\bsrc\\s*=\\s*[\'"])' + escapedUrl + '([\'"])',
+					'gi'
+				);
+				updatedContent = updatedContent.replace(htmlImgRe, `$1${formatted}$2`);
+
+				// Replace wiki embed: ![[url]] -> ![[local]]
+				const wikiRe = new RegExp(
+					'!\\[\\[' + escapedUrl + '\\]\\]',
+					'g'
+				);
+				updatedContent = updatedContent.replace(wikiRe, `![[${formatted}]]`);
 			}
 
 			updatedContent = collapseLinkedImages(updatedContent);
 
 			if (updatedContent !== content) {
 				await app.vault.modify(file, updatedContent);
+				rollbackManager?.recordModify(file.path, content, `Localize remote images in: ${file.name}`);
 			}
 
 			notesWithImages++;
