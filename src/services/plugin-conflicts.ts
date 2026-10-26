@@ -174,7 +174,8 @@ export class PluginConflictDetector {
 	async getInstalledPlugins(): Promise<Array<{ id: string; name: string; version: string }>> {
 		try {
 			const vault = this.app.vault;
-			const pluginsDir = vault.getAbstractFileByPath('.obsidian/plugins') as TFolder | null;
+			const configDir = vault.configDir;
+			const pluginsDir = vault.getAbstractFileByPath(configDir + '/plugins') as TFolder | null;
 			if (!pluginsDir) return [];
 
 			const plugins: Array<{ id: string; name: string; version: string }> = [];
@@ -184,7 +185,7 @@ export class PluginConflictDetector {
 				}
 				try {
 					const entryId = entry.name;
-					const manifest = await vault.adapter.read(`.obsidian/plugins/${entryId}/manifest.json`);
+					const manifest = await vault.adapter.read(configDir + '/plugins/' + entryId + '/manifest.json');
 					const parsed = JSON.parse(manifest) as Record<string, unknown>;
 					plugins.push({
 						id: (parsed.id as string) || entryId,
