@@ -1,3 +1,4 @@
+import { App, TAbstractFile, TFile, normalizePath } from 'obsidian';
 import { ReferenceSpan, ReferenceType } from '../core/path-resolver';
 import { scanReferences } from '../core/reference-scanner';
 
@@ -273,4 +274,93 @@ export function filterIssuesBySeverity(issues: AuditIssue[], severity: AuditIssu
 
 export function filterIssuesByType(issues: AuditIssue[], type: AuditIssue['type']): AuditIssue[] {
 	return issues.filter(i => i.type === type);
+}
+
+/**
+ * Audit all attachments across the vault for duplicates and orphans.
+ * Scans all markdown notes for attachment references, then compares against
+ * all attachment files in the vault.
+ */
+export async function auditVaultAttachments(app: App): Promise<AuditReport> {
+	const issues: AuditIssue[] = [];
+	const files = app.vault.getMarkdownFiles();
+
+	// Collect all referenced attachments from notes
+	const referencedAttachments = new Set<string>();
+	const attachmentLinks = new Map<string, string[]>(); // link -> [note paths]
+
+	for (const file of files) {
+		const content = await app.vault.read(file);
+		const scan = scanReferences(content);
+
+		for (const ref of scan.references) {
+			if (ref.type === ReferenceType.InternalImage ||
+				ref.type === ReferenceType.InternalWikiImage ||
+				ref.type === ReferenceType.HtmlImage ||
+				ref.type === ReferenceType.InternalLink ||
+				ref.type === ReferenceType.InternalWikilink) {
+				const linkPath = normalizePath(ref.link);
+				const fileObj = app.vault.getAbstractFileByPath(linkPath);
+				if (fileObj && fileObj instanceof TFile && isAttachmentFile(fileObj)) {
+					referencedAttachments.add(fileObj.path);
+					if (!attachmentLinks.has(fileObj.path)) {
+						attachmentLinks.set(fileObj.path, []);
+					}
+					attachmentLinks.get(fileObj.path)!.push(file.path);
+				}
+			}
+		}
+	}
+
+	// Collect all attachment files in the vault
+	const allAttachments = new Set<string>();
+	for (const file of app.vault.getAllLoadedFiles()) {
+		if (file instanceof TFile && isAttachmentFile(file)) {
+			allAttachments.add(file.path);
+		}
+	}
+
+	// Detect duplicates (by filename)
+	const attachmentNames = Array.from(allAttachments).map(p => p.split('/').pop()!);
+	const duplicateIssues = detectDuplicates(attachmentNames);
+	// Add file paths to duplicate issues
+	for (const issue of duplicateIssues) {
+		if (issue.link) {
+			const matchingFiles = Array.from(allAttachments).filter(p =>
+				p.split('/').pop()!.toLowerCase() === issue.link!.toLowerCase()
+			);
+			if (matchingFiles.length > 0) {
+				issue.filePath = matchingFiles.join(', ');
+				issue.reason = `Duplicate files found: ${matchingFiles.join(', ')}`;
+			}
+		}
+	}
+	issues.push(...duplicateIssues);
+
+	// Detect orphaned attachments (not referenced by any note)
+	const orphanIssues = detectOrphanedAttachments(allAttachments, referencedAttachments);
+	for (const issue of orphanIssues) {
+		if (issue.link) {
+			issue.filePath = issue.link;
+		}
+	}
+	issues.push(...orphanIssues);
+
+	return createAuditReport(files.length, allAttachments.size, issues);
+}
+
+/**
+ * Check if a file is an attachment file.
+ */
+function isAttachmentFile(file: TAbstractFile): boolean {
+	if (!(file instanceof TFile)) {
+		return false;
+	}
+	const ext = file.extension.toLowerCase();
+	const attachmentExtensions = [
+		'png', 'jpg', 'jpeg', 'gif', 'bmp', 'svg', 'webp', 'ico', 'tiff', 'tif', 'avif',
+		'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'epub',
+		'mp3', 'mp4', 'wav', 'ogg', 'webm'
+	];
+	return attachmentExtensions.includes(ext);
 }

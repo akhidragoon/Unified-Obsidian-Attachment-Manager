@@ -18,6 +18,7 @@ import { scanReferences } from './core/reference-scanner';
 import { applyReferenceEdits } from './core/safe-markdown-editor';
 import { downloadAndReplaceImages, saveImagesInFolder, collectMarkdownFiles } from './services/image-downloader';
 import { auditAttachmentLinks, generateLinkConsistencyReportText } from './services/link-consistency';
+import { auditVaultAttachments, generateAuditReportText } from './services/vault-auditor';
 import { PluginConflictDetector, PluginConflictSeverity } from './services/plugin-conflicts';
 import { PluginDependentsComponent } from './services/plugin-dependents';
 import { CrossPluginApi, PLUGIN_API_CONTRACT, PLUGIN_API_VERSION } from './services/plugin-api';
@@ -28,6 +29,7 @@ import { moveAttachmentsOnNoteRename, cleanupAttachmentsOnNoteDelete, isNoteFile
 import { normalizeFileName, normalizeAllFileNames, scanNonNormalizedFiles } from './services/unicode-name-normalizer';
 import { findPathCompatibilityViolations, repairName, PathCompatibilityPlatform } from './services/path-compatibility';
 import { createMovePlan, validateMovePlan, generateOrganizationReport } from './services/attachment-organizer';
+import { RollbackManager } from './services/rollback-manager';
 
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp', '.ico', '.tiff', '.tif', '.avif'];
 
@@ -201,6 +203,7 @@ export default class UnifiedAttachmentManager extends Plugin {
 	public pluginDependentsComponent: PluginDependentsComponent | null = null;
 	public crossPluginApi: CrossPluginApi | null = null;
 	public firstLoadNotice: FirstLoadNoticeComponent | null = null;
+	public rollbackManager: RollbackManager | null = null;
 	public wasDataFileMissingOnInitialLoad = false;
 
 	async onload() {
@@ -232,7 +235,10 @@ export default class UnifiedAttachmentManager extends Plugin {
 			pluginNoticeComponent: this
 		});
 
-		// 6. Register setting tab
+		// 6. Initialize rollback manager
+		this.rollbackManager = new RollbackManager(this.app);
+
+		// 7. Register setting tab
 		this.addSettingTab(new UnifiedAttachmentManagerSettingTab(this.app, this));
 
 		// 7. Register commands
@@ -283,7 +289,7 @@ export default class UnifiedAttachmentManager extends Plugin {
 			callback: () => {
 				const root = this.app.vault.getAbstractFileByPath('/');
 				if (root instanceof TFolder) {
-					void saveImagesInFolder(this.app, root, this.settings.showProgress ?? true, this.settings);
+					void saveImagesInFolder(this.app, root, this.settings.showProgress ?? true, this.settings, this.rollbackManager);
 				} else {
 					new Notice('Could not access vault root');
 				}
@@ -328,8 +334,15 @@ export default class UnifiedAttachmentManager extends Plugin {
 		this.addCommand({
 			id: 'find-duplicate-attachments',
 			name: 'Find duplicate attachments',
-			callback: () => {
-				new Notice('Duplicate detection coming soon');
+			callback: async () => {
+				const report = await auditVaultAttachments(this.app);
+				const duplicates = report.issues.filter(i => i.type === 'duplicate');
+				if (duplicates.length === 0) {
+					new Notice('No duplicate attachments found.');
+				} else {
+					new Notice(`Found ${duplicates.length} duplicate attachment group(s).`);
+					console.log(generateAuditReportText(report));
+				}
 			}
 		});
 
@@ -337,8 +350,15 @@ export default class UnifiedAttachmentManager extends Plugin {
 		this.addCommand({
 			id: 'review-unused-attachments',
 			name: 'Review potentially unused attachments',
-			callback: () => {
-				new Notice('Orphan detection coming soon');
+			callback: async () => {
+				const report = await auditVaultAttachments(this.app);
+				const orphans = report.issues.filter(i => i.type === 'orphaned');
+				if (orphans.length === 0) {
+					new Notice('No orphaned attachments found.');
+				} else {
+					new Notice(`Found ${orphans.length} orphaned attachment(s).`);
+					console.log(generateAuditReportText(report));
+				}
 			}
 		});
 
@@ -346,8 +366,19 @@ export default class UnifiedAttachmentManager extends Plugin {
 		this.addCommand({
 			id: 'undo-last-operation',
 			name: 'Undo last operation',
-			callback: () => {
-				new Notice('No operations to undo');
+			callback: async () => {
+				if (!this.rollbackManager) {
+					new Notice('Rollback manager not initialized.');
+					return;
+				}
+				const result = await this.rollbackManager.undo();
+				if (result.undone && result.undoneEntry) {
+					new Notice(`Undone: ${result.undoneEntry.description}`);
+				} else if (result.error) {
+					new Notice(result.error);
+				} else {
+					new Notice('No operations to undo.');
+				}
 			}
 		});
 
@@ -400,7 +431,7 @@ export default class UnifiedAttachmentManager extends Plugin {
 							.setTitle('Localize remote images in folder')
 							.setIcon('image-down')
 							.onClick(() => {
-								void saveImagesInFolder(this.app, file, this.settings.showProgress ?? true, this.settings);
+								void saveImagesInFolder(this.app, file, this.settings.showProgress ?? true, this.settings, this.rollbackManager);
 							});
 					});
 				}
@@ -462,7 +493,7 @@ export default class UnifiedAttachmentManager extends Plugin {
 
 	private async saveImages(file: TFile): Promise<void> {
 		try {
-			const result = await downloadAndReplaceImages(this.app, file, this.settings.showProgress ?? true);
+			const result = await downloadAndReplaceImages(this.app, file, this.settings.showProgress ?? true, this.rollbackManager);
 			if (result.total === 0) return;
 			if (result.failed > 0) {
 				new Notice(`Saved ${result.saved}/${result.total} images. ${result.failed} failed.`);

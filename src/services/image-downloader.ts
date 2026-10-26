@@ -7,6 +7,7 @@
 
 import { App, Notice, TFile, TFolder, Vault, requestUrl, normalizePath } from 'obsidian';
 import { type PluginSettings } from '../settings/settings';
+import { RollbackManager } from './rollback-manager';
 
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp', '.ico', '.tiff', '.tif', '.avif'];
 
@@ -169,7 +170,8 @@ function findRemoteImageUrls(content: string): string[] {
 export async function downloadAndReplaceImages(
 	app: App,
 	file: TFile,
-	showNotice: boolean
+	showNotice: boolean,
+	rollbackManager?: RollbackManager | null
 ): Promise<DownloadResult> {
 	const content = await app.vault.read(file);
 	const urls = findRemoteImageUrls(content);
@@ -216,6 +218,7 @@ export async function downloadAndReplaceImages(
 			await app.vault.createBinary(filePath, buffer);
 			urlToLocal.set(url, filePath);
 			result.saved++;
+			rollbackManager?.recordCreateBinary(filePath, `Download image: ${url}`);
 		} catch (e: unknown) {
 			result.failed++;
 			const msg = e instanceof Error ? e.message : 'Unknown error';
@@ -234,6 +237,7 @@ export async function downloadAndReplaceImages(
 
 	if (updatedContent !== content) {
 		await app.vault.modify(file, updatedContent);
+		rollbackManager?.recordModify(file.path, content, `Localize remote images in: ${file.name}`);
 	}
 
 	if (showNotice) {
@@ -266,7 +270,8 @@ export async function saveImagesInFolder(
 	app: App,
 	folder: TFolder,
 	showNotice: boolean,
-	settings: PluginSettings
+	settings: PluginSettings,
+	rollbackManager?: RollbackManager | null
 ): Promise<void> {
 	const files = collectMarkdownFiles(folder);
 
@@ -315,6 +320,7 @@ export async function saveImagesInFolder(
 					await app.vault.createBinary(filePath, buffer);
 					urlToLocal.set(url, filePath);
 					saved++;
+					rollbackManager?.recordCreateBinary(filePath, `Download image: ${url}`);
 				} catch (e: unknown) {
 					failed++;
 					const msg = e instanceof Error ? e.message : 'Unknown error';
@@ -333,6 +339,7 @@ export async function saveImagesInFolder(
 
 			if (updatedContent !== content) {
 				await app.vault.modify(file, updatedContent);
+				rollbackManager?.recordModify(file.path, content, `Localize remote images in: ${file.name}`);
 			}
 
 			notesWithImages++;
