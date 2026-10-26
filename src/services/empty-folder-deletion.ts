@@ -13,12 +13,16 @@ export enum EmptyFolderBehavior {
 	DeleteWithEmptyParents = 'delete-with-empty-parents'
 }
 
+export interface PluginNoticeComponent {
+	showNotice(message: string): void;
+}
+
 export interface EmptyFolderOptions {
 	abortSignal: AbortSignal;
 	app: App;
 	emptyFolderBehavior: EmptyFolderBehavior;
 	isPathIgnored: (path: string, isFolder?: boolean) => boolean;
-	pluginNoticeComponent: any;
+	pluginNoticeComponent: PluginNoticeComponent;
 }
 
 export interface EmptyFolderResult {
@@ -54,7 +58,7 @@ export async function deleteEmptyFolders(options: EmptyFolderOptions): Promise<E
 			if (!(folder instanceof TFolder)) continue;
 
 			// Re-check emptiness (another deletion may have emptied it)
-			if ((folder.children as any[]).length > 0) continue;
+			if (folder.children.length > 0) continue;
 
 			await options.app.vault.trash(folder, true);
 			result.deletedCount++;
@@ -87,7 +91,7 @@ async function collectEmptyFolders(
 	const walk = (folder: TFolder) => {
 		for (const child of folder.children) {
 			if (child instanceof TFolder) {
-				if ((child.children as any[]).length === 0) {
+				if (child.children.length === 0) {
 					if (!isPathIgnored(child.path, true)) {
 						folders.push(child.path);
 					}

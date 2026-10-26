@@ -6,7 +6,7 @@
  * Warning conflicts let both plugins run but notify the user.
  */
 
-import { App, TFolder } from 'obsidian';
+import { App, TFolder, Vault } from 'obsidian';
 
 export enum PluginConflictSeverity {
 	Block = 'block',
@@ -88,7 +88,7 @@ export class PluginConflictDetector {
 	 * installed plugins in the vault's .obsidian/plugins directory.
 	 */
 	constructor(
-		private readonly app: any,
+		private readonly app: App,
 		private readonly pluginId: string,
 		private readonly pluginName: string,
 		private readonly pluginVersion: string
@@ -171,24 +171,25 @@ export class PluginConflictDetector {
 	/**
 	 * Get the list of installed plugins from the vault.
 	 */
-	getInstalledPlugins(): Array<{ id: string; name: string; version: string }> {
+	async getInstalledPlugins(): Promise<Array<{ id: string; name: string; version: string }>> {
 		try {
-			const pluginsDir = this.app.vault.getAbstractFileByPath('.obsidian/plugins');
+			const vault = this.app.vault;
+			const pluginsDir = vault.getAbstractFileByPath('.obsidian/plugins') as TFolder | null;
 			if (!pluginsDir) return [];
 
 			const plugins: Array<{ id: string; name: string; version: string }> = [];
-			for (const entry of (pluginsDir as any).children || []) {
+			for (const entry of pluginsDir.children) {
 				if (!(entry instanceof TFolder)) {
 					continue;
 				}
 				try {
-					const entryId = (entry as any).id || '';
-					const manifest = this.app.vault.read(`.obsidian/plugins/${entryId}/manifest.json`);
-					const parsed = JSON.parse(manifest);
+					const entryId = entry.name;
+					const manifest = await vault.adapter.read(`.obsidian/plugins/${entryId}/manifest.json`);
+					const parsed = JSON.parse(manifest) as Record<string, unknown>;
 					plugins.push({
-						id: parsed.id || entryId,
-						name: parsed.name || entryId,
-						version: parsed.version || '0.0.0'
+						id: (parsed.id as string) || entryId,
+						name: (parsed.name as string) || entryId,
+						version: (parsed.version as string) || '0.0.0'
 					});
 				} catch {
 					// Skip plugins with unreadable manifests

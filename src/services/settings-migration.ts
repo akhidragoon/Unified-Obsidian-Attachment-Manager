@@ -9,12 +9,13 @@
 export interface MigrationResult {
 	migrated: boolean;
 	errors: string[];
+	migratedRecord: Record<string, unknown>;
 }
 
 export interface MigrationStep {
 	fromVersion: string;
 	toVersion: string;
-	migrate: (record: any) => any;
+	migrate: (record: Record<string, unknown>) => Record<string, unknown>;
 }
 
 export class SettingsMigration {
@@ -25,12 +26,12 @@ export class SettingsMigration {
 			{
 				fromVersion: '0.0.0',
 				toVersion: '0.1.0',
-				migrate: this.migrate000To010
+				migrate: (record) => this.migrate000To010(record)
 			},
 			{
 				fromVersion: '0.1.0',
 				toVersion: '0.2.0',
-				migrate: this.migrate010To020
+				migrate: (record) => this.migrate010To020(record)
 			}
 		];
 	}
@@ -39,9 +40,9 @@ export class SettingsMigration {
 	 * Migrate a settings record from its stored version to the current version.
 	 * Returns the migrated record and whether any migration was applied.
 	 */
-	migrate(record: any, storedVersion: string): MigrationResult {
+	migrate(record: Record<string, unknown>, storedVersion: string): MigrationResult {
 		const errors: string[] = [];
-		let current = record;
+		let current: Record<string, unknown> = record;
 		let currentVersion = storedVersion || '0.0.0';
 		let migrated = false;
 
@@ -63,7 +64,7 @@ export class SettingsMigration {
 			}
 		}
 
-		return { migrated, errors };
+		return { migrated, errors, migratedRecord: current };
 	}
 
 	private versionLessThan(a: string, b: string): boolean {
@@ -90,7 +91,7 @@ export class SettingsMigration {
 	 * Migration 0.0.0 -> 0.1.0: Initial settings schema.
 	 * No changes needed - this is the baseline.
 	 */
-	private migrate000To010(record: any): any {
+	private migrate000To010(record: Record<string, unknown>): Record<string, unknown> {
 		return record;
 	}
 
@@ -98,7 +99,7 @@ export class SettingsMigration {
 	 * Migration 0.1.0 -> 0.2.0: Add all rename/delete handler settings.
 	 * All new fields are off by default.
 	 */
-	private migrate010To020(record: any): any {
+	private migrate010To020(record: Record<string, unknown>): Record<string, unknown> {
 		return {
 			...record,
 			shouldHandleRenames: false,
