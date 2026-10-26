@@ -8,7 +8,7 @@
  * - Frontmatter link issues
  */
 
-import { App, TAbstractFile, TFile, normalizePath } from 'obsidian';
+import { App, Notice, TAbstractFile, TFile, normalizePath, TFolder } from 'obsidian';
 
 export interface LinkConsistencyIssue {
 	type: 'broken_link' | 'misplaced_attachment' | 'frontmatter_broken_link';
@@ -364,4 +364,46 @@ export function generateLinkConsistencyReportText(
 	}
 
 	return lines.join('\n');
+}
+
+/**
+ * Check link consistency across all markdown notes in the vault.
+ */
+export async function auditAttachmentLinks(app: App): Promise<void> {
+	const files = app.vault.getMarkdownFiles();
+	const issues: LinkConsistencyIssue[] = [];
+	let totalAttachments = 0;
+
+	for (const file of files) {
+		const content = await app.vault.read(file);
+		const cache = app.metadataCache.getCache(file.path);
+		if (!cache) continue;
+
+		const properFolder = getProperAttachmentFolder(app, file.path);
+
+		const links = cache.links ?? [];
+		for (const link of links) {
+			const issue = checkSingleLink(app, file, link, properFolder);
+			if (issue) {
+				issues.push(issue);
+				if (issue.type === 'misplaced_attachment') totalAttachments++;
+				else totalAttachments++;
+			}
+		}
+
+		const embeds = cache.embeds ?? [];
+		for (const embed of embeds) {
+			const issue = checkSingleLink(app, file, embed, properFolder, true);
+			if (issue) {
+				issues.push(issue);
+				totalAttachments++;
+			}
+		}
+	}
+
+	const report = createLinkConsistencyReport(files.length, issues);
+	const reportText = generateLinkConsistencyReportText(report);
+
+	new Notice(`Audit complete: ${report.summary.brokenLinks} broken links, ${report.summary.misplacedAttachments} misplaced`);
+	new Notice(reportText.substring(0, 200) + '...');
 }

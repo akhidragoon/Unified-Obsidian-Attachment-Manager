@@ -1,7 +1,33 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, requestUrl, normalizePath, Vault } from 'obsidian';
-import { DEFAULT_SETTINGS } from './settings/settings';
-import type { PluginSettings } from './settings/settings';
-import { createPathAuditReport, createPathIssue, getAttachmentFolderForNote, generateAttachmentReport, hasUnsafeFilename, isAttachmentFilename } from './services/path-auditor';
+/**
+ * @file
+ *
+ * Unified Obsidian Attachment Manager - main plugin entry point.
+ *
+ * UI access methods (not just command palette):
+ *   - Command palette (cmd+p / ctrl+p): all commands
+ *   - Settings tab: Settings → Unified Attachment Manager
+ *   - File menu / context menu: right-click folders → "Localize remote images in folder"
+ *   - Plugin conflict banner: shown in settings tab when blocking/warning conflicts exist
+ *   - Plugin dependents list: shown in settings tab when other plugins depend on this one
+ *   - First load notice: welcome message on first install
+ */
+
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, requestUrl, normalizePath } from 'obsidian';
+import { DEFAULT_SETTINGS, EmptyFolderBehavior, RescueAttachmentUsedByMultipleNotesMode, type PluginSettings } from './settings/settings';
+import { scanReferences } from './core/reference-scanner';
+import { applyReferenceEdits } from './core/safe-markdown-editor';
+import { downloadAndReplaceImages, saveImagesInFolder, collectMarkdownFiles } from './services/image-downloader';
+import { auditAttachmentLinks, generateLinkConsistencyReportText } from './services/link-consistency';
+import { PluginConflictDetector, PluginConflictSeverity } from './services/plugin-conflicts';
+import { PluginDependentsComponent } from './services/plugin-dependents';
+import { CrossPluginApi, PLUGIN_API_CONTRACT, PLUGIN_API_VERSION } from './services/plugin-api';
+import { settingsMigration } from './services/settings-migration';
+import { FirstLoadNoticeComponent } from './services/first-load-notice';
+import { deleteEmptyFolders, EmptyFolderBehavior as EmptyFolderBehaviorEnum } from './services/empty-folder-deletion';
+import { moveAttachmentsOnNoteRename, cleanupAttachmentsOnNoteDelete, isNoteFile, isAttachmentFile, getAttachmentFolderForNote } from './services/rename-delete-handler';
+import { normalizeFileName, normalizeAllFileNames, scanNonNormalizedFiles } from './services/unicode-name-normalizer';
+import { findPathCompatibilityViolations, repairName, PathCompatibilityPlatform } from './services/path-compatibility';
+import { createMovePlan, validateMovePlan, generateOrganizationReport } from './services/attachment-organizer';
 
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp', '.ico', '.tiff', '.tif', '.avif'];
 
@@ -36,7 +62,7 @@ function generateId(): string {
 	return id;
 }
 
-function ensureFolder(vault: Vault, folderPath: string): Promise<void> {
+function ensureFolder(vault: any, folderPath: string): Promise<void> {
 	const normalized = normalizePath(folderPath);
 	const existing = vault.getAbstractFileByPath?.(normalized);
 	if (existing) return Promise.resolve();
@@ -168,240 +194,64 @@ function findRemoteImageUrls(content: string): string[] {
 	return Array.from(urls);
 }
 
-async function downloadAndReplaceImages(
-	app: App,
-	file: TFile,
-	showNotice: boolean,
-): Promise<DownloadResult> {
-	const content = await app.vault.read(file);
-	const urls = findRemoteImageUrls(content);
-
-	const result: DownloadResult = {
-		total: urls.length,
-		saved: 0,
-		failed: 0,
-		errors: [],
-	};
-
-	if (urls.length === 0) {
-		if (showNotice) {
-			new Notice('No remote images found in this note.');
-		}
-		return result;
-	}
-
-	const attachmentFolder = buildAttachmentFolder(app, file);
-	await ensureFolder(app.vault, attachmentFolder);
-
-	if (showNotice) {
-		new Notice(`Found ${urls.length} remote image(s). Downloading...`);
-	}
-
-	const urlToLocal = new Map<string, string>();
-
-	for (const url of urls) {
-		try {
-			const response = await requestUrl({ url });
-			const buffer = response.arrayBuffer;
-
-			const contentType = response.headers['content-type'] ?? '';
-			let ext: string;
-			if (contentType && contentType.includes('image/')) {
-				ext = extensionFromContentType(contentType);
-			} else {
-				ext = extensionFromUrl(url);
-			}
-
-			const filename = `${generateId()}.${ext}`;
-			const filePath = normalizePath(`${attachmentFolder}/${filename}`);
-
-			await app.vault.createBinary(filePath, buffer);
-			urlToLocal.set(url, filePath);
-			result.saved++;
-		} catch (e: unknown) {
-			result.failed++;
-			const msg = e instanceof Error ? e.message : 'Unknown error';
-			result.errors.push(`${url}: ${msg}`);
-		}
-	}
-
-let updatedContent = content;
-	for (const [url, localPath] of urlToLocal) {
-		const formatted = formatMarkdownLinkTarget(localPath);
-		const pattern = new RegExp(escapeForRegex(url), 'g');
-		updatedContent = updatedContent.replace(pattern, formatted);
-	}
-
-	updatedContent = collapseLinkedImages(updatedContent);
-
-	if (updatedContent !== content) {
-		await app.vault.modify(file, updatedContent);
-	}
-
-	if (showNotice) {
-		if (result.failed > 0) {
-			new Notice(
-				`Saved ${result.saved}/${result.total} images. ${result.failed} failed.`,
-			);
-		} else {
-			new Notice(`All ${result.saved} images saved locally.`);
-		}
-	}
-
-	return result;
-}
-
-function collectMarkdownFiles(folder: TFolder): TFile[] {
-	const out: TFile[] = [];
-	const walk = (f: TFolder) => {
-		for (const child of f.children) {
-			if (child instanceof TFile && child.extension === 'md') {
-				out.push(child);
-			} else if (child instanceof TFolder) {
-				walk(child);
-			}
-		}
-	};
-	walk(folder);
-	return out;
-}
-
-async function saveImagesInFolder(
-	app: App,
-	folder: TFolder,
-	showNotice: boolean,
-): Promise<void> {
-	const files = collectMarkdownFiles(folder);
-
-	if (files.length === 0) {
-		if (showNotice) new Notice('No Markdown notes found in this folder.');
-		return;
-	}
-
-	if (showNotice) new Notice(`Scanning ${files.length} note(s) for remote images...`);
-
-	let notesWithImages = 0;
-	let totalSaved = 0;
-	let totalFailed = 0;
-	const errors: string[] = [];
-
-	for (const file of files) {
-		try {
-			const result = await downloadAndReplaceImages(app, file, false);
-			if (result.total > 0) notesWithImages++;
-			totalSaved += result.saved;
-			totalFailed += result.failed;
-			for (const err of result.errors) {
-				errors.push(`${file.path}: ${err}`);
-			}
-		} catch (e: unknown) {
-			const msg = e instanceof Error ? e.message : 'Unknown error';
-			errors.push(`${file.path}: ${msg}`);
-			totalFailed++;
-		}
-	}
-
-	const failedSuffix = totalFailed > 0 ? `, ${totalFailed} failed` : '';
-	const summary =
-		`${files.length} note(s) scanned, ${notesWithImages} contained images, ` +
-		`${totalSaved} image(s) saved${failedSuffix}.`;
-	new Notice(summary, 8000);
-
-	if (errors.length > 0) {
-		new Notice(`Errors in ${errors.length} file(s). Check console for details.`);
-	}
-}
-
-async function auditAttachmentLinks(app: App): Promise<void> {
-	const root = app.vault.getAbstractFileByPath('/');
-	if (!(root instanceof TFolder)) {
-		new Notice('Could not access vault root');
-		return;
-	}
-	const files = collectMarkdownFiles(root);
-	const issues = [];
-	let totalAttachments = 0;
-	let referencedAttachments = new Set<string>();
-
-	for (const file of files) {
-		const content = await app.vault.read(file);
-		const urls = findRemoteImageUrls(content);
-
-		for (const url of urls) {
-			if (looksLikeImage(url)) {
-				issues.push(createPathIssue(
-					'broken_link',
-					file.path,
-					url,
-					'Remote image not downloaded to vault',
-					'high',
-				));
-			}
-		}
-
-		// Find all attachment links in the note
-		for (const pattern of LINK_PATTERNS) {
-			pattern.lastIndex = 0;
-			let match: RegExpExecArray | null;
-			while ((match = pattern.exec(content)) !== null) {
-				const link = match[2] ?? match[1] ?? '';
-				if (!link || link.startsWith('http') || link.startsWith('#')) continue;
-
-				const linkPath = normalizePath(link);
-				const fileObj = app.vault.getAbstractFileByPath(linkPath);
-				if (fileObj && fileObj instanceof TFile && isAttachmentFilename(fileObj.name)) {
-					referencedAttachments.add(linkPath);
-					totalAttachments++;
-
-					// Check if attachment is in proper folder
-					const properFolder = getAttachmentFolderForNote(app, file.path);
-					const linkDir = linkPath.substring(0, linkPath.lastIndexOf('/'));
-					if (properFolder && linkDir !== properFolder) {
-						issues.push(createPathIssue(
-							'misplaced',
-							file.path,
-							link,
-							'Attachment not in proper folder for this note',
-							'medium',
-							`${properFolder}/${fileObj.name}`,
-						));
-					}
-				}
-			}
-		}
-	}
-
-	// Check for unsafe filenames
-	const allFiles = app.vault.getAllLoadedFiles();
-	for (const f of allFiles) {
-		if (f instanceof TFile && isAttachmentFilename(f.name)) {
-			if (hasUnsafeFilename(f.name)) {
-				issues.push(createPathIssue(
-					'unsafe_filename',
-					f.path,
-					f.name,
-					'Filename contains unsafe characters',
-					'low',
-				));
-			}
-		}
-	}
-
-	const report = createPathAuditReport(files.length, totalAttachments, issues);
-	const reportText = generateAttachmentReport(report);
-
-	// Create a modal or notice with the report
-	new Notice(`Audit complete: ${report.summary.brokenLinks} broken links, ${report.summary.missingAttachments} missing, ${report.summary.misplaced} misplaced`);
-	new Notice(reportText.substring(0, 200) + '...');
-}
-
 export default class UnifiedAttachmentManager extends Plugin {
 	settings!: PluginSettings;
 
+	public pluginConflictDetector: PluginConflictDetector | null = null;
+	public pluginDependentsComponent: PluginDependentsComponent | null = null;
+	public crossPluginApi: CrossPluginApi | null = null;
+	public firstLoadNotice: FirstLoadNoticeComponent | null = null;
+	public wasDataFileMissingOnInitialLoad = false;
+
 	async onload() {
-		await this.loadSettings();
+		// 1. Load settings with migration
+		await this.loadSettingsWithMigration();
+
+		// 2. Initialize plugin conflict detector
+		this.pluginConflictDetector = new PluginConflictDetector(
+			this.app,
+			this.manifest.id,
+			this.manifest.name,
+			this.manifest.version
+		);
+
+		// 3. Initialize plugin dependents tracking
+		this.pluginDependentsComponent = new PluginDependentsComponent({
+			app: this.app,
+			pluginId: this.manifest.id
+		});
+		this.pluginDependentsComponent.registerEvents();
+
+		// 4. Initialize cross-plugin API
+		this.crossPluginApi = new CrossPluginApi(this.settings);
+
+		// 5. Initialize first load notice
+		this.firstLoadNotice = new FirstLoadNoticeComponent({
+			app: this.app,
+			pluginId: this.manifest.id,
+			pluginNoticeComponent: this
+		});
+
+		// 6. Register setting tab
 		this.addSettingTab(new UnifiedAttachmentManagerSettingTab(this.app, this));
 
+		// 7. Register commands
+		this.registerCommands();
+
+		// 8. Register file menu event for folders
+		this.registerFileMenuEvent();
+
+		// 9. Register file system event listeners for rename/delete handling
+		if (this.settings.shouldHandleRenames || this.settings.shouldHandleDeletions) {
+			this.registerFileSystemEvents();
+		}
+
+		// 10. Show first load notice
+		void this.firstLoadNotice.showIfFirstLoad(this.wasDataFileMissingOnInitialLoad);
+	}
+
+	public registerCommands(): void {
+		// Localize remote images in current note
 		this.addCommand({
 			id: 'localize-remote-images-current-note',
 			name: 'Localize remote images in current note',
@@ -414,70 +264,134 @@ export default class UnifiedAttachmentManager extends Plugin {
 					void this.saveImages(file);
 				}
 				return true;
-			},
+			}
 		});
 
+		// Localize remote images in folder
 		this.addCommand({
 			id: 'localize-remote-images-folder',
 			name: 'Localize remote images in folder',
 			callback: async () => {
 				new Notice('Use the context menu on a folder to localize images in that folder');
-			},
+			}
 		});
 
+		// Localize remote images across vault
 		this.addCommand({
 			id: 'localize-remote-images-vault',
 			name: 'Localize remote images across vault',
 			callback: () => {
 				const root = this.app.vault.getAbstractFileByPath('/');
 				if (root instanceof TFolder) {
-					void saveImagesInFolder(this.app, root, this.settings.showProgress ?? true);
+					void saveImagesInFolder(this.app, root, this.settings.showProgress ?? true, this.settings);
 				} else {
 					new Notice('Could not access vault root');
 				}
-			},
+			}
 		});
 
+		// Audit attachment links
 		this.addCommand({
 			id: 'audit-attachment-links',
 			name: 'Audit attachment links',
 			callback: () => {
 				void auditAttachmentLinks(this.app);
-			},
+			}
 		});
 
+		// Delete empty folders
+		this.addCommand({
+			id: 'delete-empty-folders',
+			name: 'Delete empty folders',
+			callback: () => {
+				const abortSignal = new AbortController().signal;
+				void deleteEmptyFolders({
+					abortSignal,
+					app: this.app,
+					emptyFolderBehavior: this.settings.emptyFolderBehavior,
+					isPathIgnored: (path, isFolder) => this.settings.isPathIgnored?.(path, isFolder) ?? false,
+					pluginNoticeComponent: this
+				});
+			}
+		});
+
+		// Preview attachment organization
 		this.addCommand({
 			id: 'preview-attachment-organization',
 			name: 'Preview attachment organization',
 			callback: () => {
 				new Notice('Organization preview feature coming soon');
-			},
+			}
 		});
 
+		// Find duplicate attachments
 		this.addCommand({
 			id: 'find-duplicate-attachments',
 			name: 'Find duplicate attachments',
 			callback: () => {
 				new Notice('Duplicate detection coming soon');
-			},
+			}
 		});
 
+		// Review unused attachments
 		this.addCommand({
 			id: 'review-unused-attachments',
 			name: 'Review potentially unused attachments',
 			callback: () => {
 				new Notice('Orphan detection coming soon');
-			},
+			}
 		});
 
+		// Undo last operation
 		this.addCommand({
 			id: 'undo-last-operation',
 			name: 'Undo last operation',
 			callback: () => {
 				new Notice('No operations to undo');
-			},
+			}
 		});
 
+		// Normalize Unicode names
+		this.addCommand({
+			id: 'normalize-unicode-names',
+			name: 'Normalize Unicode names',
+			callback: async () => {
+				const result = await normalizeAllFileNames(this.app);
+				new Notice(
+					`Normalized ${result.normalized} file(s). `
+					+ `${result.collisions} collision(s), ${result.errors.length} error(s).`
+				);
+			}
+		});
+
+		// Check path compatibility
+		this.addCommand({
+			id: 'check-path-compatibility',
+			name: 'Check path compatibility',
+			callback: () => {
+				const platforms: PathCompatibilityPlatform[] = [
+					PathCompatibilityPlatform.Windows,
+					PathCompatibilityPlatform.Android,
+					PathCompatibilityPlatform.Linux,
+					PathCompatibilityPlatform.MacOs,
+					PathCompatibilityPlatform.Ios
+				];
+				let totalViolations = 0;
+				for (const file of this.app.vault.getAllLoadedFiles()) {
+					const violations = findPathCompatibilityViolations({
+						isFolder: file instanceof TFolder,
+						maxVaultRootPathLength: 0,
+						path: file.path,
+						platforms
+					});
+					totalViolations += violations.length;
+				}
+				new Notice(`Found ${totalViolations} path compatibility issue(s)`);
+			}
+		});
+	}
+
+	public registerFileMenuEvent(): void {
 		this.registerEvent(
 			this.app.workspace.on('file-menu', (menu, file) => {
 				if (file instanceof TFolder) {
@@ -486,12 +400,59 @@ export default class UnifiedAttachmentManager extends Plugin {
 							.setTitle('Localize remote images in folder')
 							.setIcon('image-down')
 							.onClick(() => {
-								void saveImagesInFolder(this.app, file, this.settings.showProgress ?? true);
+								void saveImagesInFolder(this.app, file, this.settings.showProgress ?? true, this.settings);
 							});
 					});
 				}
-			}),
+			})
 		);
+	}
+
+	public registerFileSystemEvents(): void {
+		// Handle note renames
+		this.registerEvent(
+			this.app.vault.on('rename', (file, oldPath) => {
+				if (!(file instanceof TFile)) return;
+				if (!isNoteFile(file)) return;
+				if (!this.settings.shouldHandleRenames) return;
+
+				void moveAttachmentsOnNoteRename(this.app, oldPath, file.path);
+			})
+		);
+
+		// Handle note deletions
+		this.registerEvent(
+			this.app.vault.on('delete', (file) => {
+				if (!(file instanceof TFile)) return;
+				if (!isNoteFile(file)) return;
+				if (!this.settings.shouldHandleDeletions) return;
+
+				void cleanupAttachmentsOnNoteDelete(this.app, file.path);
+			})
+		);
+	}
+
+	public async loadSettingsWithMigration(): Promise<void> {
+		const raw = await this.loadData();
+		const stored = raw as Partial<PluginSettings> | null;
+		const storedVersion = (stored as any)?.version ?? '0.0.0';
+
+		const migrationResult = settingsMigration.migrate(stored ?? {}, storedVersion);
+		if (migrationResult.errors.length > 0) {
+			console.warn('Settings migration errors:', migrationResult.errors.join('\n'));
+		}
+
+		this.settings = { ...DEFAULT_SETTINGS, ...(stored as any) };
+		this.wasDataFileMissingOnInitialLoad = raw === null || raw === undefined;
+	}
+
+	async loadSettings(): Promise<void> {
+		const data = (await this.loadData()) as Partial<PluginSettings> | null;
+		this.settings = { ...DEFAULT_SETTINGS, ...(data ?? {}) };
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings);
 	}
 
 	private async saveImages(file: TFile): Promise<void> {
@@ -509,13 +470,29 @@ export default class UnifiedAttachmentManager extends Plugin {
 		}
 	}
 
-	async loadSettings() {
-		const data = (await this.loadData()) as Partial<PluginSettings> | null;
-		this.settings = { ...DEFAULT_SETTINGS, ...(data ?? {}) };
+	/**
+	 * Show plugin conflict notice if blocking conflicts exist.
+	 */
+	public showConflictNotice(): void {
+		if (!this.pluginConflictDetector) return;
+
+		const installedPlugins = this.pluginConflictDetector.getInstalledPlugins();
+		const conflicts = this.pluginConflictDetector.getConflicts(installedPlugins);
+
+		if (conflicts.hasActiveBlockingConflicts) {
+			const reasons = conflicts.blocking.map(c => `${c.pluginName}: ${c.reason}`).join('\n');
+			new Notice(`Plugin conflict: ${reasons}`, 10000);
+		} else if (conflicts.hasActiveWarningConflicts) {
+			const reasons = conflicts.warning.map(c => `${c.pluginName}: ${c.reason}`).join('\n');
+			new Notice(`Plugin warning: ${reasons}`, 8000);
+		}
 	}
 
-	async saveSettings() {
-		await this.saveData(this.settings);
+	/**
+	 * Show notice (implements pluginNoticeComponent interface).
+	 */
+	public showNotice(message: string): void {
+		new Notice(message);
 	}
 }
 
@@ -531,7 +508,124 @@ class UnifiedAttachmentManagerSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		new Setting(containerEl).setName('Unified attachment manager').setHeading();
+		new Setting(containerEl).setName('Unified Attachment Manager').setHeading();
+
+		// Conflict banner
+		if (this.plugin.pluginConflictDetector) {
+			const installedPlugins = this.plugin.pluginConflictDetector.getInstalledPlugins();
+			const conflicts = this.plugin.pluginConflictDetector.getConflicts(installedPlugins);
+			if (conflicts.hasActiveBlockingConflicts || conflicts.hasActiveWarningConflicts) {
+				new Setting(containerEl)
+					.setName('Plugin Conflicts')
+					.setDesc('Some plugins may conflict with this one')
+					.addButton((btn) => {
+						btn.setButtonText('View Details')
+							.onClick(() => {
+								this.plugin.showConflictNotice();
+							});
+					});
+			}
+		}
+
+		// Feature toggles (all off by default)
+		new Setting(containerEl)
+			.setName('Should handle renames')
+			.setDesc('Whether renaming a note rewrites links pointing at its old name. Off by default.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.shouldHandleRenames);
+				toggle.onChange(async (value) => {
+					this.plugin.settings.shouldHandleRenames = value;
+					await this.plugin.saveSettings();
+					if (value) {
+						this.plugin.registerFileSystemEvents();
+					}
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Should update file name aliases')
+			.setDesc('Whether renaming a note rewrites the display text of links that pointed at its old name.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.shouldUpdateFileNameAliases);
+				toggle.onChange(async (value) => {
+					this.plugin.settings.shouldUpdateFileNameAliases = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Should rename attachment folder')
+			.setDesc('Whether renaming a note also renames or moves its attachment folder alongside it.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.shouldRenameAttachmentFolder);
+				toggle.onChange(async (value) => {
+					this.plugin.settings.shouldRenameAttachmentFolder = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Should rename attachment files')
+			.setDesc('Whether renaming a note also renames the attachment files that travel with it.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.shouldRenameAttachmentFiles);
+				toggle.onChange(async (value) => {
+					this.plugin.settings.shouldRenameAttachmentFiles = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Should handle deletions')
+			.setDesc('Whether deleting a note also deletes the attachments only that note referenced.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.shouldHandleDeletions);
+				toggle.onChange(async (value) => {
+					this.plugin.settings.shouldHandleDeletions = value;
+					await this.plugin.saveSettings();
+					if (value) {
+						this.plugin.registerFileSystemEvents();
+					}
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Empty folder behavior')
+			.setDesc('What to do with a folder a deletion or a move has left empty.')
+			.addDropdown((dropdown) => {
+				dropdown.addOptions({
+					keep: 'Keep',
+					delete: 'Delete',
+					'delete-with-empty-parents': 'Delete with empty parents'
+				});
+				dropdown.setValue(this.plugin.settings.emptyFolderBehavior);
+				dropdown.onChange(async (value) => {
+					this.plugin.settings.emptyFolderBehavior = value as any;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Should delete empty note folders')
+			.setDesc('Whether the folder a deleted note leaves empty is deleted too.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.shouldDeleteEmptyNoteFolders);
+				toggle.onChange(async (value) => {
+					this.plugin.settings.shouldDeleteEmptyNoteFolders = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Should rescue shared attachments')
+			.setDesc('Whether an attachment that survives a deletion is moved into the adopting note\'s attachment folder.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.shouldRescueSharedAttachments);
+				toggle.onChange(async (value) => {
+					this.plugin.settings.shouldRescueSharedAttachments = value;
+					await this.plugin.saveSettings();
+				});
+			});
 
 		new Setting(containerEl)
 			.setName('Show progress notices')
