@@ -229,8 +229,35 @@ export async function downloadAndReplaceImages(
 	let updatedContent = content;
 	for (const [url, localPath] of urlToLocal) {
 		const formatted = formatMarkdownLinkTarget(localPath);
-		const pattern = new RegExp(escapeForRegex(url), 'g');
-		updatedContent = updatedContent.replace(pattern, formatted);
+		const escapedUrl = escapeForRegex(url);
+
+		// Replace markdown image: ![alt](url) -> ![alt](local)
+		const mdImageRe = new RegExp(
+			'!\\[([^\\]]*)\\]\\(' + escapedUrl + '\\)',
+			'g'
+		);
+		updatedContent = updatedContent.replace(mdImageRe, `![$1](${formatted})`);
+
+		// Replace markdown link: [text](url) -> [text](local)
+		const mdLinkRe = new RegExp(
+			'\\[([^\\]]*)\\]\\(' + escapedUrl + '\\)',
+			'g'
+		);
+		updatedContent = updatedContent.replace(mdLinkRe, `[$1](${formatted})`);
+
+		// Replace HTML img: <img src="url"> -> <img src="local">
+		const htmlImgRe = new RegExp(
+			'(<img\\b[^>]*\\bsrc\\s*=\\s*[\'"])' + escapedUrl + '([\'"])',
+			'gi'
+		);
+		updatedContent = updatedContent.replace(htmlImgRe, `$1${formatted}$2`);
+
+		// Replace wiki embed: ![[url]] -> ![[local]]
+		const wikiRe = new RegExp(
+			'!\\[\\[' + escapedUrl + '\\]\\]',
+			'g'
+		);
+		updatedContent = updatedContent.replace(wikiRe, `![[${formatted}]]`);
 	}
 
 	updatedContent = collapseLinkedImages(updatedContent);
@@ -331,8 +358,35 @@ export async function saveImagesInFolder(
 			let updatedContent = content;
 			for (const [url, localPath] of urlToLocal) {
 				const formatted = formatMarkdownLinkTarget(localPath);
-				const pattern = new RegExp(escapeForRegex(url), 'g');
-				updatedContent = updatedContent.replace(pattern, formatted);
+				const escapedUrl = escapeForRegex(url);
+
+				// Replace markdown image: ![alt](url) -> ![alt](local)
+				const mdImageRe = new RegExp(
+					'!\\[([^\\]]*)\\]\\(' + escapedUrl + '\\)',
+					'g'
+				);
+				updatedContent = updatedContent.replace(mdImageRe, `![$1](${formatted})`);
+
+				// Replace markdown link: [text](url) -> [text](local)
+				const mdLinkRe = new RegExp(
+					'\\[([^\\]]*)\\]\\(' + escapedUrl + '\\)',
+					'g'
+				);
+				updatedContent = updatedContent.replace(mdLinkRe, `[$1](${formatted})`);
+
+				// Replace HTML img: <img src="url"> -> <img src="local">
+				const htmlImgRe = new RegExp(
+					'(<img\\b[^>]*\\bsrc\\s*=\\s*[\'"])' + escapedUrl + '([\'"])',
+					'gi'
+				);
+				updatedContent = updatedContent.replace(htmlImgRe, `$1${formatted}$2`);
+
+				// Replace wiki embed: ![[url]] -> ![[local]]
+				const wikiRe = new RegExp(
+					'!\\[\\[' + escapedUrl + '\\]\\]',
+					'g'
+				);
+				updatedContent = updatedContent.replace(wikiRe, `![[${formatted}]]`);
 			}
 
 			updatedContent = collapseLinkedImages(updatedContent);
