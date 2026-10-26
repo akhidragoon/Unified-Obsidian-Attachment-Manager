@@ -6,17 +6,18 @@
  */
 
 import { App, Notice } from 'obsidian';
+import { PluginNoticeComponent } from './empty-folder-deletion';
 
 export interface FirstLoadNoticeComponentConstructorParams {
 	app: App;
 	pluginId: string;
-	pluginNoticeComponent: any;
+	pluginNoticeComponent: PluginNoticeComponent;
 }
 
 export class FirstLoadNoticeComponent {
 	private readonly app: App;
 	private readonly pluginId: string;
-	private readonly pluginNoticeComponent: any;
+	private readonly pluginNoticeComponent: PluginNoticeComponent;
 
 	public constructor(params: FirstLoadNoticeComponentConstructorParams) {
 		this.app = params.app;

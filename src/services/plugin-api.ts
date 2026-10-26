@@ -55,6 +55,7 @@ export interface CrossPluginApiContract {
 	readonly version: string;
 	readonly methods: readonly string[];
 }
+import { type PluginSettings } from '../settings/settings';
 
 export const PLUGIN_API_CONTRACT = 'unified-attachment-manager-api';
 export const PLUGIN_API_VERSION = '1.0.0';
@@ -62,9 +63,9 @@ export const PLUGIN_API_VERSION = '1.0.0';
 export class CrossPluginApi implements UnifiedAttachmentManagerApi {
 	public readonly version = PLUGIN_API_VERSION;
 
-	private readonly settings: any;
+	private readonly settings: PluginSettings;
 
-	public constructor(settings: any) {
+	public constructor(settings: PluginSettings) {
 		this.settings = settings;
 	}
 

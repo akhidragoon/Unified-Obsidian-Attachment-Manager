@@ -12,7 +12,7 @@
  *   - First load notice: welcome message on first install
  */
 
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, requestUrl, normalizePath } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, Vault, requestUrl, normalizePath } from 'obsidian';
 import { DEFAULT_SETTINGS, EmptyFolderBehavior, RescueAttachmentUsedByMultipleNotesMode, type PluginSettings } from './settings/settings';
 import { scanReferences } from './core/reference-scanner';
 import { applyReferenceEdits } from './core/safe-markdown-editor';
@@ -62,7 +62,7 @@ function generateId(): string {
 	return id;
 }
 
-function ensureFolder(vault: any, folderPath: string): Promise<void> {
+function ensureFolder(vault: Vault, folderPath: string): Promise<void> {
 	const normalized = normalizePath(folderPath);
 	const existing = vault.getAbstractFileByPath?.(normalized);
 	if (existing) return Promise.resolve();
@@ -433,17 +433,22 @@ export default class UnifiedAttachmentManager extends Plugin {
 	}
 
 	public async loadSettingsWithMigration(): Promise<void> {
-		const raw = await this.loadData();
-		const stored = raw as Partial<PluginSettings> | null;
-		const storedVersion = (stored as any)?.version ?? '0.0.0';
+		const raw: Record<string, unknown> | null = (await this.loadData()) as Record<string, unknown> | null;
+		const storedVersion = (raw?.version as string | undefined) ?? '0.0.0';
 
-		const migrationResult = settingsMigration.migrate(stored ?? {}, storedVersion);
+		const migrationResult = settingsMigration.migrate(raw ?? {}, storedVersion);
 		if (migrationResult.errors.length > 0) {
 			console.warn('Settings migration errors:', migrationResult.errors.join('\n'));
 		}
 
-		this.settings = { ...DEFAULT_SETTINGS, ...(stored as any) };
-		this.wasDataFileMissingOnInitialLoad = raw === null || raw === undefined;
+		if (migrationResult.migrated) {
+			this.settings = { ...DEFAULT_SETTINGS, ...migrationResult.migratedRecord };
+			await this.saveData(this.settings);
+		} else {
+			this.settings = { ...DEFAULT_SETTINGS, ...(raw ?? {}) };
+		}
+
+		this.wasDataFileMissingOnInitialLoad = raw === null;
 	}
 
 	async loadSettings(): Promise<void> {
@@ -473,10 +478,10 @@ export default class UnifiedAttachmentManager extends Plugin {
 	/**
 	 * Show plugin conflict notice if blocking conflicts exist.
 	 */
-	public showConflictNotice(): void {
+	public async showConflictNotice(): Promise<void> {
 		if (!this.pluginConflictDetector) return;
 
-		const installedPlugins = this.pluginConflictDetector.getInstalledPlugins();
+		const installedPlugins = await this.pluginConflictDetector.getInstalledPlugins();
 		const conflicts = this.pluginConflictDetector.getConflicts(installedPlugins);
 
 		if (conflicts.hasActiveBlockingConflicts) {
@@ -511,20 +516,22 @@ class UnifiedAttachmentManagerSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName('Unified Attachment Manager').setHeading();
 
 		// Conflict banner
-		if (this.plugin.pluginConflictDetector) {
-			const installedPlugins = this.plugin.pluginConflictDetector.getInstalledPlugins();
-			const conflicts = this.plugin.pluginConflictDetector.getConflicts(installedPlugins);
-			if (conflicts.hasActiveBlockingConflicts || conflicts.hasActiveWarningConflicts) {
-				new Setting(containerEl)
-					.setName('Plugin Conflicts')
-					.setDesc('Some plugins may conflict with this one')
-					.addButton((btn) => {
-						btn.setButtonText('View Details')
-							.onClick(() => {
-								this.plugin.showConflictNotice();
-							});
-					});
-			}
+		const conflictDetector = this.plugin.pluginConflictDetector;
+		if (conflictDetector) {
+			void conflictDetector.getInstalledPlugins().then((installedPlugins) => {
+				const conflicts = conflictDetector.getConflicts(installedPlugins);
+				if (conflicts.hasActiveBlockingConflicts || conflicts.hasActiveWarningConflicts) {
+					new Setting(containerEl)
+						.setName('Plugin Conflicts')
+						.setDesc('Some plugins may conflict with this one')
+						.addButton((btn) => {
+							btn.setButtonText('View Details')
+								.onClick(async () => {
+									await this.plugin.showConflictNotice();
+								});
+						});
+				}
+			});
 		}
 
 		// Feature toggles (all off by default)
@@ -600,7 +607,7 @@ class UnifiedAttachmentManagerSettingTab extends PluginSettingTab {
 				});
 				dropdown.setValue(this.plugin.settings.emptyFolderBehavior);
 				dropdown.onChange(async (value) => {
-					this.plugin.settings.emptyFolderBehavior = value as any;
+					this.plugin.settings.emptyFolderBehavior = value as EmptyFolderBehavior;
 					await this.plugin.saveSettings();
 				});
 			});
