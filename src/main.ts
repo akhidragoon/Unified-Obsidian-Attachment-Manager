@@ -12,23 +12,20 @@
  *   - First load notice: welcome message on first install
  */
 
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, Vault, requestUrl, normalizePath } from 'obsidian';
-import { DEFAULT_SETTINGS, EmptyFolderBehavior, RescueAttachmentUsedByMultipleNotesMode, type PluginSettings } from './settings/settings';
-import { scanReferences } from './core/reference-scanner';
-import { applyReferenceEdits } from './core/safe-markdown-editor';
-import { downloadAndReplaceImages, saveImagesInFolder, collectMarkdownFiles } from './services/image-downloader';
-import { auditAttachmentLinks, generateLinkConsistencyReportText } from './services/link-consistency';
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, Vault, normalizePath } from 'obsidian';
+import { DEFAULT_SETTINGS, EmptyFolderBehavior, type PluginSettings } from './settings/settings';
+import { downloadAndReplaceImages, saveImagesInFolder } from './services/image-downloader';
+import { auditAttachmentLinks } from './services/link-consistency';
 import { auditVaultAttachments, generateAuditReportText } from './services/vault-auditor';
-import { PluginConflictDetector, PluginConflictSeverity } from './services/plugin-conflicts';
+import { PluginConflictDetector } from './services/plugin-conflicts';
 import { PluginDependentsComponent } from './services/plugin-dependents';
-import { CrossPluginApi, PLUGIN_API_CONTRACT, PLUGIN_API_VERSION } from './services/plugin-api';
+import { CrossPluginApi } from './services/plugin-api';
 import { settingsMigration } from './services/settings-migration';
 import { FirstLoadNoticeComponent } from './services/first-load-notice';
-import { deleteEmptyFolders, EmptyFolderBehavior as EmptyFolderBehaviorEnum } from './services/empty-folder-deletion';
-import { moveAttachmentsOnNoteRename, cleanupAttachmentsOnNoteDelete, isNoteFile, isAttachmentFile, getAttachmentFolderForNote } from './services/rename-delete-handler';
-import { normalizeFileName, normalizeAllFileNames, scanNonNormalizedFiles } from './services/unicode-name-normalizer';
-import { findPathCompatibilityViolations, repairName, PathCompatibilityPlatform } from './services/path-compatibility';
-import { createMovePlan, validateMovePlan, generateOrganizationReport } from './services/attachment-organizer';
+import { deleteEmptyFolders } from './services/empty-folder-deletion';
+import { moveAttachmentsOnNoteRename, cleanupAttachmentsOnNoteDelete, isNoteFile } from './services/rename-delete-handler';
+import { normalizeAllFileNames } from './services/unicode-name-normalizer';
+import { findPathCompatibilityViolations, PathCompatibilityPlatform } from './services/path-compatibility';
 import { RollbackManager } from './services/rollback-manager';
 
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp', '.ico', '.tiff', '.tif', '.avif'];
