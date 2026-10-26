@@ -190,6 +190,18 @@ export async function downloadAndReplaceImages(
 		return result;
 	}
 
+	// Preview confirmation before writing
+	if (showNotice) {
+		const urlList = urls.slice(0, 5).map(u => '• ' + u.split('/').pop()!).join('\n');
+		const more = urls.length > 5 ? `\n... and ${urls.length - 5} more` : '';
+		const confirmed = window.confirm(
+			`Found ${urls.length} remote image(s) in "${file.name}".\n\n${urlList}${more}\n\nDownload and replace with local files?`
+		);
+		if (!confirmed) {
+			return result;
+		}
+	}
+
 	const attachmentFolder = buildAttachmentFolder(app, file);
 	await ensureFolder(app.vault, attachmentFolder);
 
